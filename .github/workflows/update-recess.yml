@@ -75,7 +75,7 @@ jobs:
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v3
         with:
-          tag: recess-latest
+          tag_name: recess-latest
           name: Recess Latest
           body: |
             Recess dates database update for GovEye (monthly).

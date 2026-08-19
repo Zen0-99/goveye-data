@@ -75,7 +75,7 @@ jobs:
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v3
         with:
-          tag: committees-latest
+          tag_name: committees-latest
           name: Committees Latest
           body: |
             Committees database update for GovEye (weekly).

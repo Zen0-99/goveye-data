@@ -58,7 +58,7 @@ def fetch_commons_divisions(divisions_limit=None):
         r = api_get(
             f"{COMMONS_VOTES_BASE}divisions.json/search",
             params=params,
-            timeout=30,
+            timeout=60,
         )
         page = r.json()  # Returns a list, not an object
 
@@ -85,7 +85,7 @@ def fetch_commons_division_detail(division_id):
     """Fetch full Commons division detail with all voter lists."""
     r = api_get(
         f"{COMMONS_VOTES_BASE}division/{division_id}.json",
-        timeout=30,
+        timeout=60,
     )
     return r.json()
 
@@ -181,7 +181,7 @@ def fetch_lords_divisions(divisions_limit=None):
         r = api_get(
             f"{LORDS_VOTES_BASE}Divisions/search",
             params=params,
-            timeout=30,
+            timeout=60,
         )
         page = r.json()  # Lords API also returns a bare list
 
@@ -208,7 +208,7 @@ def fetch_lords_division_detail(division_id):
     """Fetch full Lords division detail with all voter lists."""
     r = api_get(
         f"{LORDS_VOTES_BASE}Divisions/{division_id}",
-        timeout=30,
+        timeout=60,
     )
     return r.json()
 
@@ -236,9 +236,9 @@ def map_lords_voter_to_entity(voter, division_id, vote, is_teller=0):
     """Map a Lords voter to a division_votes row tuple (camelCase fields)."""
     return (
         division_id,
-        voter.get("memberId", 0),
+        voter.get("memberId") or 0,
         vote,
-        voter.get("name", ""),
+        voter.get("name") or "",
         voter.get("party", "") or "",
         voter.get("partyColour", "") or "",
         voter.get("memberFrom", "") or "",
@@ -323,7 +323,7 @@ def fetch_commons_divisions_since(max_id, divisions_limit=None):
         r = api_get(
             f"{COMMONS_VOTES_BASE}divisions.json/search",
             params=params,
-            timeout=30,
+            timeout=60,
         )
         page = r.json()
 
@@ -368,7 +368,7 @@ def fetch_lords_divisions_since(max_id, divisions_limit=None):
         r = api_get(
             f"{LORDS_VOTES_BASE}Divisions/search",
             params=params,
-            timeout=30,
+            timeout=60,
         )
         page = r.json()
 
@@ -440,6 +440,7 @@ def build_seed(output_path, schema_path, divisions_limit=None):
         conn.commit()
         logger.info("Lords data committed: %d divisions", lords_count)
     except Exception as e:
+        conn.rollback()
         logger.warning(
             "Lords fetch failed: %s. Publishing with Commons-only data.",
             e,
@@ -494,6 +495,7 @@ def build_delta(output_path, previous_db, schema_path, divisions_limit=None):
         conn.commit()
         logger.info("Lords delta committed: %d new divisions", len(new_lords))
     except Exception as e:
+        conn.rollback()
         logger.warning(
             "Lords delta fetch failed: %s. Commons data already committed.",
             e,

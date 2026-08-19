@@ -75,7 +75,7 @@ jobs:
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v3
         with:
-          tag: bills-latest
+          tag_name: bills-latest
           name: Bills Latest
           body: |
             Bills database update for GovEye (2x daily).

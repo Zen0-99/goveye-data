@@ -75,7 +75,7 @@ jobs:
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v3
         with:
-          tag: mps-latest
+          tag_name: mps-latest
           name: MPs Latest
           body: |
             Daily MPs database update for GovEye.

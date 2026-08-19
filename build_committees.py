@@ -57,7 +57,7 @@ def fetch_all_mps(mp_limit=None):
         r = api_get(
             f"{MEMBERS_BASE}Members/Search",
             params=params,
-            timeout=30,
+            timeout=60,
         )
         data = r.json()
         items = data.get("items", [])
@@ -93,7 +93,7 @@ def fetch_committees_for_mp(mp_id):
     r = api_get(
         f"{COMMITTEES_BASE}Committees",
         params={"MemberId": mp_id},
-        timeout=30,
+        timeout=60,
     )
     data = r.json()
     return data.get("items", [])

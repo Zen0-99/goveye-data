@@ -60,7 +60,7 @@ def fetch_all_mps(mp_limit=None):
         r = api_get(
             f"{MEMBERS_BASE}Members/Search",
             params=params,
-            timeout=30,
+            timeout=60,
         )
         data = r.json()
         items = data.get("items", [])

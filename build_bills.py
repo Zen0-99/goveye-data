@@ -51,7 +51,7 @@ def fetch_all_bills(bill_limit=None):
         r = api_get(
             f"{BILLS_BASE}Bills",
             params=params,
-            timeout=30,
+            timeout=60,
         )
         data = r.json()
         items = data.get("items", [])
@@ -83,7 +83,7 @@ def fetch_bill_stages(bill_id):
     """
     r = api_get(
         f"{BILLS_BASE}Bills/{bill_id}/Stages",
-        timeout=30,
+        timeout=60,
     )
     data = r.json()
     # Handle both {"items": [...]} and bare list responses

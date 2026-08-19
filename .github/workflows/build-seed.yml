@@ -43,7 +43,7 @@ jobs:
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v3
         with:
-          tag: seed-latest
+          tag_name: seed-latest
           name: Seed Database
           body: |
             Seed database for GovEye — the first-launch download source (D-04).

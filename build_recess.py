@@ -43,7 +43,7 @@ def fetch_recess_html(house_id):
     """Fetch the recess dates HTML page for a given house."""
     r = api_get(
         f"{EGG_TIMER_BASE}/egg-timer/houses/{house_id}/recess-dates",
-        timeout=30,
+        timeout=60,
     )
     # The API returns HTML, not JSON — use .text not .json()
     return r.text

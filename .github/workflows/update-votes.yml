@@ -75,7 +75,7 @@ jobs:
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v3
         with:
-          tag: votes-latest
+          tag_name: votes-latest
           name: Votes Latest
           body: |
             Votes database update for GovEye (4x daily per D-09).
