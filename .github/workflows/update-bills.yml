@@ -1,0 +1,93 @@
+name: Update Bills
+
+on:
+  schedule:
+    - cron: '0 */12 * * *'  # 2x daily (every 12 hours)
+  workflow_dispatch:      # Manual trigger for seed builds and testing
+
+permissions:
+  contents: write  # Required by softprops/action-gh-release@v3
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60  # Bills fetch includes per-bill stage fetches
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download previous DB and manifest
+        id: download_prev
+        run: |
+          # Attempt to download previous bills.db and manifest.json from the bills-latest release.
+          # If this fails (first run, no previous release), we proceed in seed mode.
+          gh release download bills-latest \
+            --pattern bills.db --output prev_bills.db || echo "No previous DB (first run)"
+          gh release download bills-latest \
+            --pattern manifest.json --output prev_manifest.json || echo "No previous manifest (first run)"
+          if [ -f prev_bills.db ]; then
+            echo "has_previous=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_previous=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Bills database (seed mode)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python build_bills.py --output bills.db --schema schemas/8.json --mode seed
+
+      - name: Build Bills database (delta mode)
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python build_bills.py --output bills.db --schema schemas/8.json --mode delta --previous-db prev_bills.db
+
+      # Per-API DBs are intermediate artifacts, not opened by Room.
+      # Schema validation happens on the merged goveye.db in build-seed.yml.
+      - name: Generate diff patch
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python diff_db.py --new bills.db --previous prev_bills.db --schema schemas/8.json --output patch.json --tables bills,bill_stages
+
+      - name: Generate diff patch (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python diff_db.py --new bills.db --schema schemas/8.json --output patch.json --tables bills,bill_stages
+
+      - name: Generate manifest
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python manifest.py --db bills.db --patch patch.json --output manifest.json --schema schemas/8.json --previous-manifest prev_manifest.json
+
+      - name: Generate manifest (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python manifest.py --db bills.db --patch patch.json --output manifest.json --schema schemas/8.json
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v3
+        with:
+          tag: bills-latest
+          name: Bills Latest
+          body: |
+            Bills database update for GovEye (2x daily).
+
+            - **bills.db**: Per-API SQLite database (bills + bill_stages tables only)
+            - **patch.json**: Incremental diff patch (bills + bill_stages)
+            - **manifest.json**: Version, SHA-256 hashes, and file sizes
+
+            See manifest.json for the current version number and file hashes.
+          files: |
+            bills.db
+            patch.json
+            manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

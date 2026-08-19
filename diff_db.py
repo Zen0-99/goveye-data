@@ -32,7 +32,7 @@ TABLE_PRIMARY_KEYS = {
     "division_votes": ["divisionId", "memberId"],
     "remote_keys": ["label"],
     "committees": ["id"],
-    "mp_committee_cross_ref": ["mpId", "committeeId"],
+    "mp_committee_cross_ref": ["memberId", "committeeId"],
     "bills": ["id"],
     "bill_stages": ["id"],
     "bill_follows": ["id"],
@@ -118,7 +118,8 @@ def diff_table(new_conn, prev_conn, table_name, pk_columns):
     return {"upsert": upserts, "delete": deletes}
 
 
-def generate_diff(new_db_path, previous_db_path, schema_path, output_path):
+def generate_diff(new_db_path, previous_db_path, schema_path, output_path,
+                  tables=None):
     """Generate a JSON diff patch comparing new DB vs previous DB.
 
     Args:
@@ -126,10 +127,18 @@ def generate_diff(new_db_path, previous_db_path, schema_path, output_path):
         previous_db_path: Path to the previous DB file (None for first run).
         schema_path: Path to the Room schema JSON.
         output_path: Path to write the patch JSON file.
+        tables: Optional list of table names to diff (D-10). If provided,
+            only those tables are diffed instead of all 16. The SKIP_TABLES
+            set still applies (mps_fts is always skipped — auto-synced).
     """
     schema = schema_module.load_schema(schema_path)
     schema_version = schema_module.get_version(schema)
     table_names = schema_module.get_table_names(schema)
+
+    # D-10: filter to only the requested tables when --tables is provided
+    if tables:
+        requested = {t.strip() for t in tables if t.strip()}
+        table_names = table_names & requested
 
     new_conn = sqlite3.connect(new_db_path)
     new_conn.row_factory = sqlite3.Row  # Enable row access by column name
@@ -192,9 +201,15 @@ def main():
         "--output", required=True,
         help="Path to write the patch JSON file.",
     )
+    parser.add_argument(
+        "--tables", default=None,
+        help="Comma-separated list of tables to diff (e.g. mps,mps_fts). "
+             "If omitted, diffs all tables.",
+    )
     args = parser.parse_args()
 
-    generate_diff(args.new, args.previous, args.schema, args.output)
+    tables = args.tables.split(",") if args.tables else None
+    generate_diff(args.new, args.previous, args.schema, args.output, tables=tables)
 
 
 if __name__ == "__main__":

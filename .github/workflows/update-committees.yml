@@ -1,0 +1,93 @@
+name: Update Committees
+
+on:
+  schedule:
+    - cron: '0 4 * * 1'  # Weekly, Monday 4am UTC
+  workflow_dispatch:      # Manual trigger for seed builds and testing
+
+permissions:
+  contents: write  # Required by softprops/action-gh-release@v3
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120  # 650 per-MP API calls take time
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download previous DB and manifest
+        id: download_prev
+        run: |
+          # Attempt to download previous committees.db and manifest.json from the committees-latest release.
+          # If this fails (first run, no previous release), we proceed in seed mode.
+          gh release download committees-latest \
+            --pattern committees.db --output prev_committees.db || echo "No previous DB (first run)"
+          gh release download committees-latest \
+            --pattern manifest.json --output prev_manifest.json || echo "No previous manifest (first run)"
+          if [ -f prev_committees.db ]; then
+            echo "has_previous=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_previous=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Committees database (seed mode)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python build_committees.py --output committees.db --schema schemas/8.json --mode seed
+
+      - name: Build Committees database (delta mode)
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python build_committees.py --output committees.db --schema schemas/8.json --mode delta --previous-db prev_committees.db
+
+      # Per-API DBs are intermediate artifacts, not opened by Room.
+      # Schema validation happens on the merged goveye.db in build-seed.yml.
+      - name: Generate diff patch
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python diff_db.py --new committees.db --previous prev_committees.db --schema schemas/8.json --output patch.json --tables committees,mp_committee_cross_ref
+
+      - name: Generate diff patch (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python diff_db.py --new committees.db --schema schemas/8.json --output patch.json --tables committees,mp_committee_cross_ref
+
+      - name: Generate manifest
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python manifest.py --db committees.db --patch patch.json --output manifest.json --schema schemas/8.json --previous-manifest prev_manifest.json
+
+      - name: Generate manifest (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python manifest.py --db committees.db --patch patch.json --output manifest.json --schema schemas/8.json
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v3
+        with:
+          tag: committees-latest
+          name: Committees Latest
+          body: |
+            Committees database update for GovEye (weekly).
+
+            - **committees.db**: Per-API SQLite database (committees + mp_committee_cross_ref tables only)
+            - **patch.json**: Incremental diff patch (committees + mp_committee_cross_ref)
+            - **manifest.json**: Version, SHA-256 hashes, and file sizes
+
+            See manifest.json for the current version number and file hashes.
+          files: |
+            committees.db
+            patch.json
+            manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,60 @@
+name: Build Seed
+
+on:
+  workflow_dispatch:  # Manual trigger only — the seed is built on demand
+
+permissions:
+  contents: write  # Required by softprops/action-gh-release@v3
+
+jobs:
+  build-seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180  # Full seed build may take 60+ min for all divisions
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build all 5 per-API databases (seed mode)
+        run: |
+          python build_mps.py --output mps.db --schema schemas/8.json --mode seed
+          python build_votes.py --output votes.db --schema schemas/8.json --mode seed
+          python build_bills.py --output bills.db --schema schemas/8.json --mode seed
+          python build_committees.py --output committees.db --schema schemas/8.json --mode seed
+          python build_recess.py --output recess.db --schema schemas/8.json --mode seed
+
+      - name: Merge per-API DBs into goveye.db
+        run: |
+          python merge_dbs.py --output goveye.db --schema schemas/8.json \
+            --mps-db mps.db --votes-db votes.db --bills-db bills.db \
+            --committees-db committees.db --recess-db recess.db
+
+      - name: Validate merged schema
+        run: |
+          # This PASSES because goveye.db has all 16 tables + correct identity hash.
+          python validate_schema.py --db goveye.db --schema schemas/8.json
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v3
+        with:
+          tag: seed-latest
+          name: Seed Database
+          body: |
+            Seed database for GovEye — the first-launch download source (D-04).
+
+            - **goveye.db**: Full merged SQLite database (all 16 tables, all 650 MPs
+              + all historical voting data + bills + committees + recess dates)
+
+            This is built on demand by running all 5 per-API build scripts in seed
+            mode, then merging with merge_dbs.py. The merged DB passes
+            validate_schema.py (all 16 tables + correct Room identity hash).
+          files: |
+            goveye.db
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

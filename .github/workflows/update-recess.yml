@@ -1,0 +1,93 @@
+name: Update Recess
+
+on:
+  schedule:
+    - cron: '0 5 1 * *'  # Monthly, 1st of month 5am UTC
+  workflow_dispatch:      # Manual trigger for seed builds and testing
+
+permissions:
+  contents: write  # Required by softprops/action-gh-release@v3
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15  # Recess dates are tiny — 2 API calls
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download previous DB and manifest
+        id: download_prev
+        run: |
+          # Attempt to download previous recess.db and manifest.json from the recess-latest release.
+          # If this fails (first run, no previous release), we proceed in seed mode.
+          gh release download recess-latest \
+            --pattern recess.db --output prev_recess.db || echo "No previous DB (first run)"
+          gh release download recess-latest \
+            --pattern manifest.json --output prev_manifest.json || echo "No previous manifest (first run)"
+          if [ -f prev_recess.db ]; then
+            echo "has_previous=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_previous=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Recess database (seed mode)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python build_recess.py --output recess.db --schema schemas/8.json --mode seed
+
+      - name: Build Recess database (delta mode)
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python build_recess.py --output recess.db --schema schemas/8.json --mode delta --previous-db prev_recess.db
+
+      # Per-API DBs are intermediate artifacts, not opened by Room.
+      # Schema validation happens on the merged goveye.db in build-seed.yml.
+      - name: Generate diff patch
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python diff_db.py --new recess.db --previous prev_recess.db --schema schemas/8.json --output patch.json --tables recess_dates,recess_dates_meta
+
+      - name: Generate diff patch (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python diff_db.py --new recess.db --schema schemas/8.json --output patch.json --tables recess_dates,recess_dates_meta
+
+      - name: Generate manifest
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python manifest.py --db recess.db --patch patch.json --output manifest.json --schema schemas/8.json --previous-manifest prev_manifest.json
+
+      - name: Generate manifest (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python manifest.py --db recess.db --patch patch.json --output manifest.json --schema schemas/8.json
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v3
+        with:
+          tag: recess-latest
+          name: Recess Latest
+          body: |
+            Recess dates database update for GovEye (monthly).
+
+            - **recess.db**: Per-API SQLite database (recess_dates + recess_dates_meta tables only)
+            - **patch.json**: Incremental diff patch (recess_dates + recess_dates_meta)
+            - **manifest.json**: Version, SHA-256 hashes, and file sizes
+
+            See manifest.json for the current version number and file hashes.
+          files: |
+            recess.db
+            patch.json
+            manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,4 +1,4 @@
-name: Update Database
+name: Update MPs
 
 on:
   schedule:
@@ -11,7 +11,7 @@ permissions:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 120  # Seed build may take 60+ min; daily delta ~5 min
+    timeout-minutes: 30  # MPs fetch is fast — 650 MPs / 20 per page = 33 pages
 
     steps:
       - uses: actions/checkout@v4
@@ -26,13 +26,13 @@ jobs:
       - name: Download previous DB and manifest
         id: download_prev
         run: |
-          # Attempt to download previous goveye.db and manifest.json from the database-latest release.
+          # Attempt to download previous mps.db and manifest.json from the mps-latest release.
           # If this fails (first run, no previous release), we proceed in seed mode.
-          gh release download database-latest \
-            --pattern goveye.db --output prev_goveye.db || echo "No previous DB (first run)"
-          gh release download database-latest \
+          gh release download mps-latest \
+            --pattern mps.db --output prev_mps.db || echo "No previous DB (first run)"
+          gh release download mps-latest \
             --pattern manifest.json --output prev_manifest.json || echo "No previous manifest (first run)"
-          if [ -f prev_goveye.db ]; then
+          if [ -f prev_mps.db ]; then
             echo "has_previous=true" >> $GITHUB_OUTPUT
           else
             echo "has_previous=false" >> $GITHUB_OUTPUT
@@ -40,55 +40,53 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build database (seed mode)
+      - name: Build MPs database (seed mode)
         if: steps.download_prev.outputs.has_previous != 'true'
         run: |
-          python build_db.py --output goveye.db --schema schemas/8.json --mode seed
+          python build_mps.py --output mps.db --schema schemas/8.json --mode seed
 
-      - name: Build database (delta mode)
+      - name: Build MPs database (delta mode)
         if: steps.download_prev.outputs.has_previous == 'true'
         run: |
-          python build_db.py --output goveye.db --schema schemas/8.json --mode delta --previous-db prev_goveye.db
+          python build_mps.py --output mps.db --schema schemas/8.json --mode delta --previous-db prev_mps.db
 
-      - name: Validate schema
-        run: |
-          python validate_schema.py --db goveye.db --schema schemas/8.json
-
+      # Per-API DBs are intermediate artifacts, not opened by Room.
+      # Schema validation happens on the merged goveye.db in build-seed.yml.
       - name: Generate diff patch
         if: steps.download_prev.outputs.has_previous == 'true'
         run: |
-          python diff_db.py --new goveye.db --previous prev_goveye.db --schema schemas/8.json --output patch.json
+          python diff_db.py --new mps.db --previous prev_mps.db --schema schemas/8.json --output patch.json --tables mps,mps_fts
 
       - name: Generate diff patch (first run)
         if: steps.download_prev.outputs.has_previous != 'true'
         run: |
-          python diff_db.py --new goveye.db --schema schemas/8.json --output patch.json
+          python diff_db.py --new mps.db --schema schemas/8.json --output patch.json --tables mps,mps_fts
 
       - name: Generate manifest
         if: steps.download_prev.outputs.has_previous == 'true'
         run: |
-          python manifest.py --db goveye.db --patch patch.json --output manifest.json --schema schemas/8.json --previous-manifest prev_manifest.json
+          python manifest.py --db mps.db --patch patch.json --output manifest.json --schema schemas/8.json --previous-manifest prev_manifest.json
 
       - name: Generate manifest (first run)
         if: steps.download_prev.outputs.has_previous != 'true'
         run: |
-          python manifest.py --db goveye.db --patch patch.json --output manifest.json --schema schemas/8.json
+          python manifest.py --db mps.db --patch patch.json --output manifest.json --schema schemas/8.json
 
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v3
         with:
-          tag: database-latest
-          name: Database Latest
+          tag: mps-latest
+          name: MPs Latest
           body: |
-            Daily database update for GovEye.
+            Daily MPs database update for GovEye.
 
-            - **goveye.db**: Full SQLite database (all 650 MPs + all historical voting data)
-            - **patch.json**: Incremental diff patch (per-table upsert/delete arrays)
+            - **mps.db**: Per-API SQLite database (mps + mps_fts tables only)
+            - **patch.json**: Incremental diff patch (mps table only)
             - **manifest.json**: Version, SHA-256 hashes, and file sizes
 
             See manifest.json for the current version number and file hashes.
           files: |
-            goveye.db
+            mps.db
             patch.json
             manifest.json
         env:
