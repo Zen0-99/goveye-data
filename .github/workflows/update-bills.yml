@@ -43,34 +43,34 @@ jobs:
       - name: Build Bills database (seed mode)
         if: steps.download_prev.outputs.has_previous != 'true'
         run: |
-          python build_bills.py --output bills.db --schema schemas/8.json --mode seed
+          python build_bills.py --output bills.db --schema schemas/bundled_schema.json --mode seed
 
       - name: Build Bills database (delta mode)
         if: steps.download_prev.outputs.has_previous == 'true'
         run: |
-          python build_bills.py --output bills.db --schema schemas/8.json --mode delta --previous-db prev_bills.db
+          python build_bills.py --output bills.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_bills.db
 
       # Per-API DBs are intermediate artifacts, not opened by Room.
       # Schema validation happens on the merged goveye.db in build-seed.yml.
       - name: Generate diff patch
         if: steps.download_prev.outputs.has_previous == 'true'
         run: |
-          python diff_db.py --new bills.db --previous prev_bills.db --schema schemas/8.json --output patch.json --tables bills,bill_stages
+          python diff_db.py --new bills.db --previous prev_bills.db --schema schemas/bundled_schema.json --output patch.json --tables bills,bill_stages
 
       - name: Generate diff patch (first run)
         if: steps.download_prev.outputs.has_previous != 'true'
         run: |
-          python diff_db.py --new bills.db --schema schemas/8.json --output patch.json --tables bills,bill_stages
+          python diff_db.py --new bills.db --schema schemas/bundled_schema.json --output patch.json --tables bills,bill_stages
 
       - name: Generate manifest
         if: steps.download_prev.outputs.has_previous == 'true'
         run: |
-          python manifest.py --db bills.db --patch patch.json --output manifest.json --schema schemas/8.json --previous-manifest prev_manifest.json
+          python manifest.py --db bills.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json --previous-manifest prev_manifest.json
 
       - name: Generate manifest (first run)
         if: steps.download_prev.outputs.has_previous != 'true'
         run: |
-          python manifest.py --db bills.db --patch patch.json --output manifest.json --schema schemas/8.json
+          python manifest.py --db bills.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json
 
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v3

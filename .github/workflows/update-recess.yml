@@ -43,34 +43,34 @@ jobs:
       - name: Build Recess database (seed mode)
         if: steps.download_prev.outputs.has_previous != 'true'
         run: |
-          python build_recess.py --output recess.db --schema schemas/8.json --mode seed
+          python build_recess.py --output recess.db --schema schemas/bundled_schema.json --mode seed
 
       - name: Build Recess database (delta mode)
         if: steps.download_prev.outputs.has_previous == 'true'
         run: |
-          python build_recess.py --output recess.db --schema schemas/8.json --mode delta --previous-db prev_recess.db
+          python build_recess.py --output recess.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_recess.db
 
       # Per-API DBs are intermediate artifacts, not opened by Room.
       # Schema validation happens on the merged goveye.db in build-seed.yml.
       - name: Generate diff patch
         if: steps.download_prev.outputs.has_previous == 'true'
         run: |
-          python diff_db.py --new recess.db --previous prev_recess.db --schema schemas/8.json --output patch.json --tables recess_dates,recess_dates_meta
+          python diff_db.py --new recess.db --previous prev_recess.db --schema schemas/bundled_schema.json --output patch.json --tables recess_dates,recess_dates_meta
 
       - name: Generate diff patch (first run)
         if: steps.download_prev.outputs.has_previous != 'true'
         run: |
-          python diff_db.py --new recess.db --schema schemas/8.json --output patch.json --tables recess_dates,recess_dates_meta
+          python diff_db.py --new recess.db --schema schemas/bundled_schema.json --output patch.json --tables recess_dates,recess_dates_meta
 
       - name: Generate manifest
         if: steps.download_prev.outputs.has_previous == 'true'
         run: |
-          python manifest.py --db recess.db --patch patch.json --output manifest.json --schema schemas/8.json --previous-manifest prev_manifest.json
+          python manifest.py --db recess.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json --previous-manifest prev_manifest.json
 
       - name: Generate manifest (first run)
         if: steps.download_prev.outputs.has_previous != 'true'
         run: |
-          python manifest.py --db recess.db --patch patch.json --output manifest.json --schema schemas/8.json
+          python manifest.py --db recess.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json
 
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v3
