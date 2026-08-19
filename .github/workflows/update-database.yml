@@ -1,0 +1,95 @@
+name: Update Database
+
+on:
+  schedule:
+    - cron: '0 3 * * *'  # Daily 3am UTC
+  workflow_dispatch:      # Manual trigger for seed builds and testing
+
+permissions:
+  contents: write  # Required by softprops/action-gh-release@v3
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120  # Seed build may take 60+ min; daily delta ~5 min
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download previous DB and manifest
+        id: download_prev
+        run: |
+          # Attempt to download previous goveye.db and manifest.json from the database-latest release.
+          # If this fails (first run, no previous release), we proceed in seed mode.
+          gh release download database-latest \
+            --pattern goveye.db --output prev_goveye.db || echo "No previous DB (first run)"
+          gh release download database-latest \
+            --pattern manifest.json --output prev_manifest.json || echo "No previous manifest (first run)"
+          if [ -f prev_goveye.db ]; then
+            echo "has_previous=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_previous=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build database (seed mode)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python build_db.py --output goveye.db --schema schemas/8.json --mode seed
+
+      - name: Build database (delta mode)
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python build_db.py --output goveye.db --schema schemas/8.json --mode delta --previous-db prev_goveye.db
+
+      - name: Validate schema
+        run: |
+          python validate_schema.py --db goveye.db --schema schemas/8.json
+
+      - name: Generate diff patch
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python diff_db.py --new goveye.db --previous prev_goveye.db --schema schemas/8.json --output patch.json
+
+      - name: Generate diff patch (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python diff_db.py --new goveye.db --schema schemas/8.json --output patch.json
+
+      - name: Generate manifest
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python manifest.py --db goveye.db --patch patch.json --output manifest.json --schema schemas/8.json --previous-manifest prev_manifest.json
+
+      - name: Generate manifest (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python manifest.py --db goveye.db --patch patch.json --output manifest.json --schema schemas/8.json
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v3
+        with:
+          tag: database-latest
+          name: Database Latest
+          body: |
+            Daily database update for GovEye.
+
+            - **goveye.db**: Full SQLite database (all 650 MPs + all historical voting data)
+            - **patch.json**: Incremental diff patch (per-table upsert/delete arrays)
+            - **manifest.json**: Version, SHA-256 hashes, and file sizes
+
+            See manifest.json for the current version number and file hashes.
+          files: |
+            goveye.db
+            patch.json
+            manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
