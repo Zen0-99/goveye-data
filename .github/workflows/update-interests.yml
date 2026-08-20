@@ -1,0 +1,93 @@
+name: Update Interests
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly, Monday 6am UTC
+  workflow_dispatch:      # Manual trigger for seed builds and testing
+
+permissions:
+  contents: write  # Required by softprops/action-gh-release@v3
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120  # Interests fetch is slow — 650 MPs × variable interests per MP
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download previous DB and manifest
+        id: download_prev
+        run: |
+          # Attempt to download previous interests.db and manifest.json from the interests-latest release.
+          # If this fails (first run, no previous release), we proceed in seed mode.
+          gh release download interests-latest \
+            --pattern interests.db --output prev_interests.db || echo "No previous DB (first run)"
+          gh release download interests-latest \
+            --pattern manifest.json --output prev_manifest.json || echo "No previous manifest (first run)"
+          if [ -f prev_interests.db ]; then
+            echo "has_previous=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_previous=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Interests database (seed mode)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python build_interests.py --output interests.db --schema schemas/bundled_schema.json --mode seed
+
+      - name: Build Interests database (delta mode)
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python build_interests.py --output interests.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_interests.db
+
+      # Per-API DBs are intermediate artifacts, not opened by Room.
+      # Schema validation happens on the merged goveye.db in build-seed.yml.
+      - name: Generate diff patch
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python diff_db.py --new interests.db --previous prev_interests.db --schema schemas/bundled_schema.json --output patch.json --tables interests
+
+      - name: Generate diff patch (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python diff_db.py --new interests.db --schema schemas/bundled_schema.json --output patch.json --tables interests
+
+      - name: Generate manifest
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python manifest.py --db interests.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json --previous-manifest prev_manifest.json
+
+      - name: Generate manifest (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python manifest.py --db interests.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: interests-latest
+          name: Interests Latest
+          body: |
+            Interests database update for GovEye (weekly).
+
+            - **interests.db**: Per-API SQLite database (interests table only)
+            - **patch.json**: Incremental diff patch (interests)
+            - **manifest.json**: Version, SHA-256 hashes, and file sizes
+
+            See manifest.json for the current version number and file hashes.
+          files: |
+            interests.db
+            patch.json
+            manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

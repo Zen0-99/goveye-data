@@ -123,6 +123,7 @@ API_TABLE_NAMES = {
     "bills": ["bills", "bill_stages"],
     "committees": ["committees", "mp_committee_cross_ref"],
     "recess": ["recess_dates", "recess_dates_meta"],
+    "interests": ["interests"],
 }
 
 

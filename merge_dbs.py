@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Merge the 6 per-API DBs into one goveye.db (D-10a).
+"""Merge the 7 per-API DBs into one goveye.db (D-10a).
 
 Combines mps.db, commons_votes.db, lords_votes.db, bills.db, committees.db,
-and recess.db into a single goveye.db with all 16 tables + the correct Room
-identity hash. Used for the seed release only (the first-launch download
-source, D-04).
+recess.db, and interests.db into a single goveye.db with all 16 tables +
+the correct Room identity hash. Used for the seed release only (the
+first-launch download source, D-04).
 
 Commons and Lords votes are separate per-API DBs that both write to the
 divisions + division_votes tables. Commons divisions have house=1, Lords
@@ -19,18 +19,19 @@ Implementation:
      copied (triggers created by create_database_with_tables).
   4. VACUUM to minimize size.
 
-Tables not populated by any build script (hansard_contributions, interests,
+Tables not populated by any build script (hansard_contributions,
 remote_keys, follows, bill_follows, mp_notification_prefs) remain empty —
-they're created by the schema but have no data (hansard/interests are
-future use; follows/bill_follows/mp_notification_prefs are user data
-created at runtime by LocalDatabase per D-10a).
+they're created by the schema but have no data (hansard is future use;
+follows/bill_follows/mp_notification_prefs are user data created at
+runtime by LocalDatabase per D-10a).
 
 Missing per-API DBs are handled gracefully (skip with warning, table empty).
 
 Usage:
   python merge_dbs.py --output goveye.db --schema schemas/bundled_schema.json \
       --mps-db mps.db --commons-votes-db commons_votes.db --lords-votes-db lords_votes.db \
-      --bills-db bills.db --committees-db committees.db --recess-db recess.db
+      --bills-db bills.db --committees-db committees.db --recess-db recess.db \
+      --interests-db interests.db
 """
 
 import argparse
@@ -48,19 +49,21 @@ SOURCE_MAP = [
     ("bills_db", "bills", ["bills", "bill_stages"]),
     ("committees_db", "committees", ["committees", "mp_committee_cross_ref"]),
     ("recess_db", "recess", ["recess_dates", "recess_dates_meta"]),
+    ("interests_db", "interests", ["interests"]),
 ]
 
 
 def merge_dbs(output_path, schema_path, mps_db, commons_votes_db,
-              lords_votes_db, bills_db, committees_db, recess_db):
-    """Merge the 6 per-API DBs into one goveye.db.
+              lords_votes_db, bills_db, committees_db, recess_db,
+              interests_db=None):
+    """Merge the 7 per-API DBs into one goveye.db.
 
     Args:
         output_path: Path for the merged goveye.db.
         schema_path: Path to the Room schema JSON (bundled_schema.json).
         mps_db, commons_votes_db, lords_votes_db, bills_db, committees_db,
-        recess_db: Paths to the 6 per-API DBs. Any may be None or missing
-        (skipped with warning).
+        recess_db, interests_db: Paths to the 7 per-API DBs. Any may be
+        None or missing (skipped with warning).
     """
     all_table_names = schema_module.get_all_table_names(schema_path)
 
@@ -77,6 +80,7 @@ def merge_dbs(output_path, schema_path, mps_db, commons_votes_db,
         "bills_db": bills_db,
         "committees_db": committees_db,
         "recess_db": recess_db,
+        "interests_db": interests_db,
     }
 
     # 2. ATTACH each per-API DB and copy data
@@ -129,7 +133,7 @@ def merge_dbs(output_path, schema_path, mps_db, commons_votes_db,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Merge the 6 per-API DBs into one goveye.db (seed release)."
+        description="Merge the 7 per-API DBs into one goveye.db (seed release)."
     )
     parser.add_argument(
         "--output", default="goveye.db",
@@ -145,6 +149,7 @@ def main():
     parser.add_argument("--bills-db", default=None, help="Path to bills.db")
     parser.add_argument("--committees-db", default=None, help="Path to committees.db")
     parser.add_argument("--recess-db", default=None, help="Path to recess.db")
+    parser.add_argument("--interests-db", default=None, help="Path to interests.db")
     args = parser.parse_args()
 
     merge_dbs(
@@ -155,6 +160,7 @@ def main():
         bills_db=args.bills_db,
         committees_db=args.committees_db,
         recess_db=args.recess_db,
+        interests_db=args.interests_db,
     )
 
 

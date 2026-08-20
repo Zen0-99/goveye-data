@@ -1,4 +1,4 @@
-"""Unit tests for merge_dbs.py — combines 6 per-API DBs into goveye.db.
+"""Unit tests for merge_dbs.py — combines 7 per-API DBs into goveye.db.
 
 Uses create_database_with_tables to build small per-API DBs with test data,
 runs merge_dbs, and verifies all 16 tables exist, data is copied, the
@@ -143,6 +143,27 @@ def make_recess_db(path, count=2):
     conn.close()
 
 
+def make_interests_db(path, count=2):
+    """Create an interests.db with a few test interests."""
+    conn = schema_module.create_database_with_tables(
+        path, SCHEMA_PATH, ["interests"],
+    )
+    ts = 1700000000000
+    for i in range(1, count + 1):
+        conn.execute(
+            "INSERT OR REPLACE INTO interests (id, memberId, summary, "
+            "categoryId, categoryNumber, categoryName, registrationDate, "
+            "publishedDate, rectified, fieldsJson, lastUpdated, "
+            "parsedAmountPence, currencyCode, bucket) "
+            "VALUES (?, ?, ?, 1, '1', 'Employment and earnings', "
+            "'2024-01-15', '2024-01-20', 0, '[]', ?, 500000, 'GBP', "
+            "'Employment/Earnings')",
+            (i, 100 + i, f"Test interest {i}", ts),
+        )
+    conn.commit()
+    conn.close()
+
+
 class TestMergeDbs(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -152,6 +173,7 @@ class TestMergeDbs(unittest.TestCase):
         self.bills_db = os.path.join(self.tmpdir, "bills.db")
         self.committees_db = os.path.join(self.tmpdir, "committees.db")
         self.recess_db = os.path.join(self.tmpdir, "recess.db")
+        self.interests_db = os.path.join(self.tmpdir, "interests.db")
         self.goveye_db = os.path.join(self.tmpdir, "goveye.db")
 
     def test_merge_creates_all_tables(self):
@@ -162,6 +184,7 @@ class TestMergeDbs(unittest.TestCase):
         make_bills_db(self.bills_db)
         make_committees_db(self.committees_db)
         make_recess_db(self.recess_db)
+        make_interests_db(self.interests_db)
 
         merge_dbs.merge_dbs(
             self.goveye_db, SCHEMA_PATH,
@@ -170,6 +193,7 @@ class TestMergeDbs(unittest.TestCase):
             lords_votes_db=self.lords_votes_db,
             bills_db=self.bills_db, committees_db=self.committees_db,
             recess_db=self.recess_db,
+            interests_db=self.interests_db,
         )
 
         c = sqlite3.connect(self.goveye_db)
@@ -190,6 +214,7 @@ class TestMergeDbs(unittest.TestCase):
         make_mps_db(self.mps_db, count=3)
         make_commons_votes_db(self.commons_votes_db, count=2)
         make_lords_votes_db(self.lords_votes_db, count=1)
+        make_interests_db(self.interests_db, count=2)
 
         merge_dbs.merge_dbs(
             self.goveye_db, SCHEMA_PATH,
@@ -197,6 +222,7 @@ class TestMergeDbs(unittest.TestCase):
             commons_votes_db=self.commons_votes_db,
             lords_votes_db=self.lords_votes_db,
             bills_db=None, committees_db=None, recess_db=None,
+            interests_db=self.interests_db,
         )
 
         c = sqlite3.connect(self.goveye_db)
@@ -204,6 +230,8 @@ class TestMergeDbs(unittest.TestCase):
         self.assertEqual(mp_count, 3)
         div_count = c.execute("SELECT COUNT(*) FROM divisions").fetchone()[0]
         self.assertEqual(div_count, 3)  # 2 Commons + 1 Lords
+        interest_count = c.execute("SELECT COUNT(*) FROM interests").fetchone()[0]
+        self.assertEqual(interest_count, 2)
         c.close()
 
     def test_merge_identity_hash(self):
@@ -215,6 +243,7 @@ class TestMergeDbs(unittest.TestCase):
             mps_db=self.mps_db,
             commons_votes_db=None, lords_votes_db=None,
             bills_db=None, committees_db=None, recess_db=None,
+            interests_db=None,
         )
 
         c = sqlite3.connect(self.goveye_db)
@@ -233,6 +262,7 @@ class TestMergeDbs(unittest.TestCase):
             mps_db=self.mps_db,
             commons_votes_db=None, lords_votes_db=None,
             bills_db=None, committees_db=None, recess_db=None,
+            interests_db=None,
         )
 
         c = sqlite3.connect(self.goveye_db)
@@ -250,6 +280,7 @@ class TestMergeDbs(unittest.TestCase):
             mps_db=self.mps_db,
             commons_votes_db=None, lords_votes_db=None,
             bills_db=None, committees_db=None, recess_db=None,
+            interests_db=None,
         )
 
         c = sqlite3.connect(self.goveye_db)

@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
   "database": {
-    "version": 1,
+    "version": 2,
     "identityHash": "aed5eaea3808b15abb72f1c1e89835f9",
     "entities": [
       {
@@ -690,7 +690,7 @@
       },
       {
         "tableName": "interests",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `memberId` INTEGER NOT NULL, `summary` TEXT NOT NULL, `categoryId` INTEGER NOT NULL, `categoryNumber` TEXT NOT NULL, `categoryName` TEXT NOT NULL, `registrationDate` TEXT, `publishedDate` TEXT, `rectified` INTEGER NOT NULL, `fieldsJson` TEXT NOT NULL, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `memberId` INTEGER NOT NULL, `summary` TEXT NOT NULL, `categoryId` INTEGER NOT NULL, `categoryNumber` TEXT NOT NULL, `categoryName` TEXT NOT NULL, `registrationDate` TEXT, `publishedDate` TEXT, `rectified` INTEGER NOT NULL, `fieldsJson` TEXT NOT NULL, `lastUpdated` INTEGER NOT NULL, `parsedAmountPence` INTEGER, `currencyCode` TEXT, `bucket` TEXT, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -755,6 +755,21 @@
             "columnName": "lastUpdated",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "parsedAmountPence",
+            "columnName": "parsedAmountPence",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "currencyCode",
+            "columnName": "currencyCode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "bucket",
+            "columnName": "bucket",
+            "affinity": "TEXT"
           }
         ],
         "primaryKey": {
