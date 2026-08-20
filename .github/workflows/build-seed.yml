@@ -9,7 +9,7 @@ permissions:
 jobs:
   build-seed:
     runs-on: ubuntu-latest
-    timeout-minutes: 180  # Full seed build may take 60+ min for all divisions
+    timeout-minutes: 15  # Just downloading 6 DBs + merging — no API fetches
 
     steps:
       - uses: actions/checkout@v4
@@ -21,14 +21,35 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Build all 6 per-API databases (seed mode)
+      - name: Download all 6 per-API databases from their release tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python build_mps.py --output mps.db --schema schemas/bundled_schema.json --mode seed
-          python build_commons_votes.py --output commons_votes.db --schema schemas/bundled_schema.json --mode seed
-          python build_lords_votes.py --output lords_votes.db --schema schemas/bundled_schema.json --mode seed
-          python build_bills.py --output bills.db --schema schemas/bundled_schema.json --mode seed
-          python build_committees.py --output committees.db --schema schemas/bundled_schema.json --mode seed
-          python build_recess.py --output recess.db --schema schemas/bundled_schema.json --mode seed
+          # Download the latest per-API DB from each release tag.
+          # These are built and published by the per-API workflows (update-*.yml).
+          # If any download fails, the merge will skip that source with a warning
+          # and the corresponding tables will be empty in goveye.db.
+          gh release download mps-latest --pattern mps.db --output mps.db || echo "WARN: mps.db not found"
+          gh release download commons-votes-latest --pattern commons_votes.db --output commons_votes.db || echo "WARN: commons_votes.db not found"
+          gh release download lords-votes-latest --pattern lords_votes.db --output lords_votes.db || echo "WARN: lords_votes.db not found"
+          gh release download bills-latest --pattern bills.db --output bills.db || echo "WARN: bills.db not found"
+          gh release download committees-latest --pattern committees.db --output committees.db || echo "WARN: committees.db not found"
+          gh release download recess-latest --pattern recess.db --output recess.db || echo "WARN: recess.db not found"
+
+      - name: Verify all 6 DBs were downloaded
+        run: |
+          missing=0
+          for db in mps.db commons_votes.db lords_votes.db bills.db committees.db recess.db; do
+            if [ ! -f "$db" ]; then
+              echo "ERROR: $db is missing — cannot build a complete seed"
+              missing=1
+            fi
+          done
+          if [ "$missing" -eq 1 ]; then
+            echo "One or more per-API DBs are missing. Ensure all per-API workflows have completed at least one successful run before building the seed."
+            exit 1
+          fi
+          echo "All 6 per-API DBs present."
 
       - name: Merge per-API DBs into goveye.db
         run: |
@@ -52,9 +73,11 @@ jobs:
             - **goveye.db**: Full merged SQLite database (all 16 tables, all 650 MPs
               + all historical voting data + bills + committees + recess dates)
 
-            This is built on demand by running all 5 per-API build scripts in seed
-            mode, then merging with merge_dbs.py. The merged DB passes
-            validate_schema.py (all 16 tables + correct Room identity hash).
+            This is built by downloading the 6 per-API DBs from their respective
+            release tags (mps-latest, commons-votes-latest, lords-votes-latest,
+            bills-latest, committees-latest, recess-latest) and merging them with
+            merge_dbs.py. The merged DB passes validate_schema.py (all 16 tables +
+            correct Room identity hash).
           files: |
             goveye.db
         env:
