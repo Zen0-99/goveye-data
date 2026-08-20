@@ -16,6 +16,7 @@ Usage:
 
 import argparse
 import json
+import os
 import shutil
 import sqlite3
 import time
@@ -183,15 +184,45 @@ def insert_bill_stages(conn, stages, bill_id, timestamp_millis):
 
 # --- Build modes ---
 
-def build_seed(output_path, schema_path, bill_limit=None):
-    """Seed mode: create fresh DB, fetch all bills + stages, insert."""
+def get_max_bill_id(conn):
+    """Get the maximum bill ID from the DB (for checkpoint resume)."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT MAX(id) FROM bills")
+    result = cursor.fetchone()
+    return result[0] if result and result[0] is not None else 0
+
+
+def get_previous_bill_updates(conn):
+    """Build a dict of {billId: lastUpdate} from the previous DB (for smart delta)."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, lastUpdate FROM bills")
+    return {row[0]: row[1] for row in cursor.fetchall()}
+
+
+def build_seed(output_path, schema_path, bill_limit=None, checkpoint_db=None):
+    """Seed mode: create fresh DB, fetch all bills + stages, insert.
+
+    If checkpoint_db exists and has data, resume from MAX(bill id).
+    """
     timestamp_millis = int(time.time() * 1000)
 
-    conn = schema_module.create_database_with_tables(
-        output_path, schema_path, TABLE_NAMES,
-    )
+    if checkpoint_db and os.path.exists(checkpoint_db):
+        if os.path.abspath(checkpoint_db) != os.path.abspath(output_path):
+            shutil.copy2(checkpoint_db, output_path)
+        conn = sqlite3.connect(output_path)
+        max_bill_id = get_max_bill_id(conn)
+        logger.info("Resuming from checkpoint: max_bill_id=%d", max_bill_id)
+    else:
+        conn = schema_module.create_database_with_tables(
+            output_path, schema_path, TABLE_NAMES,
+        )
+        max_bill_id = 0
 
     bills = fetch_all_bills(bill_limit=bill_limit)
+    # Filter to only bills with billId > max_bill_id (for resume)
+    if max_bill_id > 0:
+        bills = [b for b in bills if (b.get("billId") or 0) > max_bill_id]
+
     if bills:
         insert_bills(conn, bills, timestamp_millis)
 
@@ -210,7 +241,11 @@ def build_seed(output_path, schema_path, bill_limit=None):
 
 
 def build_delta(output_path, previous_db, schema_path, bill_limit=None):
-    """Delta mode: copy previous DB, fetch all bills + stages, upsert."""
+    """Delta mode: copy previous DB, fetch all bills + stages, upsert.
+
+    Smart delta: only fetches stage details for bills whose lastUpdate
+    changed (or new bills). All bills are upserted (list data is cheap).
+    """
     timestamp_millis = int(time.time() * 1000)
 
     shutil.copy2(previous_db, output_path)
@@ -218,16 +253,29 @@ def build_delta(output_path, previous_db, schema_path, bill_limit=None):
 
     conn = sqlite3.connect(output_path)
 
+    # Build a map of previous bill lastUpdate values for smart delta
+    prev_updates = get_previous_bill_updates(conn)
+    logger.info("Delta mode: %d bills in previous DB", len(prev_updates))
+
     bills = fetch_all_bills(bill_limit=bill_limit)
     if bills:
+        # Always upsert all bills (list data is cheap)
         insert_bills(conn, bills, timestamp_millis)
 
+        # Only fetch stage details for changed or new bills
+        changed_count = 0
         for bill in bills:
             bill_id = bill.get("billId") or 0
-            stages = fetch_bill_stages(bill_id)
-            if stages:
-                insert_bill_stages(conn, stages, bill_id, timestamp_millis)
+            api_last_update = bill.get("lastUpdate") or ""
+            prev_last_update = prev_updates.get(bill_id, "")
+            if api_last_update != prev_last_update:
+                stages = fetch_bill_stages(bill_id)
+                if stages:
+                    insert_bill_stages(conn, stages, bill_id, timestamp_millis)
+                changed_count += 1
             time.sleep(API_DELAY)
+
+        logger.info("Delta: %d/%d bills had stage detail updates", changed_count, len(bills))
 
     logger.info("VACUUMing database to minimize file size...")
     conn.execute("VACUUM")
@@ -260,13 +308,17 @@ def main():
         "--bill-limit", type=int, default=None,
         help="Limit number of bills fetched (for testing).",
     )
+    parser.add_argument(
+        "--checkpoint-db",
+        help="Path to a checkpoint DB to resume from (seed mode only). If it has data, resume from MAX(billId).",
+    )
     args = parser.parse_args()
 
     if args.mode == "delta" and not args.previous_db:
         parser.error("--previous-db is required for delta mode")
 
     if args.mode == "seed":
-        build_seed(args.output, args.schema, bill_limit=args.bill_limit)
+        build_seed(args.output, args.schema, bill_limit=args.bill_limit, checkpoint_db=args.checkpoint_db)
     else:
         build_delta(args.output, args.previous_db, args.schema, bill_limit=args.bill_limit)
 

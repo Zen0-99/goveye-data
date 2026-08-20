@@ -15,6 +15,7 @@ Usage:
 """
 
 import argparse
+import os
 import shutil
 import sqlite3
 import time
@@ -218,15 +219,26 @@ def fetch_commons_divisions_since(max_id, divisions_limit=None):
 
 # --- Build modes ---
 
-def build_seed(output_path, schema_path, divisions_limit=None):
-    """Seed mode: full historical fetch of Commons divisions + votes."""
+def build_seed(output_path, schema_path, divisions_limit=None, checkpoint_db=None):
+    """Seed mode: full historical fetch of Commons divisions + votes.
+
+    If checkpoint_db exists and has data, resume from MAX(division id).
+    """
     timestamp_millis = int(time.time() * 1000)
 
-    conn = schema_module.create_database_with_tables(
-        output_path, schema_path, TABLE_NAMES,
-    )
+    if checkpoint_db and os.path.exists(checkpoint_db):
+        if os.path.abspath(checkpoint_db) != os.path.abspath(output_path):
+            shutil.copy2(checkpoint_db, output_path)
+        conn = sqlite3.connect(output_path)
+        max_id = get_max_division_id(conn, 1)
+        logger.info("Resuming from checkpoint: max_commons_id=%d", max_id)
+        commons_divisions = fetch_commons_divisions_since(max_id, divisions_limit)
+    else:
+        conn = schema_module.create_database_with_tables(
+            output_path, schema_path, TABLE_NAMES,
+        )
+        commons_divisions = fetch_commons_divisions(divisions_limit=divisions_limit)
 
-    commons_divisions = fetch_commons_divisions(divisions_limit=divisions_limit)
     commons_count = 0
     for div in commons_divisions:
         insert_commons_division(conn, div, timestamp_millis)
@@ -299,13 +311,17 @@ def main():
         "--divisions-limit", type=int, default=None,
         help="Limit number of divisions fetched (for testing).",
     )
+    parser.add_argument(
+        "--checkpoint-db",
+        help="Path to a checkpoint DB to resume from (seed mode only). If it has data, resume from MAX(id).",
+    )
     args = parser.parse_args()
 
     if args.mode == "delta" and not args.previous_db:
         parser.error("--previous-db is required for delta mode")
 
     if args.mode == "seed":
-        build_seed(args.output, args.schema, divisions_limit=args.divisions_limit)
+        build_seed(args.output, args.schema, divisions_limit=args.divisions_limit, checkpoint_db=args.checkpoint_db)
     else:
         build_delta(
             args.output, args.previous_db, args.schema,

@@ -19,6 +19,7 @@ Usage:
 """
 
 import argparse
+import os
 import shutil
 import sqlite3
 import time
@@ -154,14 +155,30 @@ def insert_cross_refs(conn, mp_id, committee_ids, timestamp_millis):
 
 # --- Build modes ---
 
-def fetch_and_insert_committees(conn, timestamp_millis, mp_limit=None):
-    """Fetch all MPs, then per-MP committees, insert committees + cross-refs."""
+def get_processed_mp_ids(conn):
+    """Get the set of MP IDs that already have committee cross-refs in the checkpoint DB."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT memberId FROM mp_committee_cross_ref")
+    return {row[0] for row in cursor.fetchall()}
+
+
+def fetch_and_insert_committees(conn, timestamp_millis, mp_limit=None, skip_mp_ids=None):
+    """Fetch all MPs, then per-MP committees, insert committees + cross-refs.
+
+    If skip_mp_ids is provided, those MPs are skipped (already in checkpoint).
+    """
+    if skip_mp_ids is None:
+        skip_mp_ids = set()
     mps = fetch_all_mps(mp_limit=mp_limit)
     total_committees = 0
     total_cross_refs = 0
+    skipped = 0
 
     for mp in mps:
         mp_id = mp.get("id") or 0
+        if mp_id in skip_mp_ids:
+            skipped += 1
+            continue
         items = fetch_committees_for_mp(mp_id)
         if items:
             insert_committees(conn, items, timestamp_millis)
@@ -172,20 +189,31 @@ def fetch_and_insert_committees(conn, timestamp_millis, mp_limit=None):
         time.sleep(API_DELAY)  # Rate limit critical — 650 per-MP calls
 
     logger.info(
-        "Committees: %d entries, %d cross-refs across %d MPs",
-        total_committees, total_cross_refs, len(mps),
+        "Committees: %d entries, %d cross-refs across %d MPs (%d skipped from checkpoint)",
+        total_committees, total_cross_refs, len(mps), skipped,
     )
 
 
-def build_seed(output_path, schema_path, mp_limit=None):
-    """Seed mode: create fresh DB, fetch all MPs + per-MP committees."""
+def build_seed(output_path, schema_path, mp_limit=None, checkpoint_db=None):
+    """Seed mode: create fresh DB, fetch all MPs + per-MP committees.
+
+    If checkpoint_db exists and has data, skip MPs already in mp_committee_cross_ref.
+    """
     timestamp_millis = int(time.time() * 1000)
+    skip_mp_ids = set()
 
-    conn = schema_module.create_database_with_tables(
-        output_path, schema_path, TABLE_NAMES,
-    )
+    if checkpoint_db and os.path.exists(checkpoint_db):
+        if os.path.abspath(checkpoint_db) != os.path.abspath(output_path):
+            shutil.copy2(checkpoint_db, output_path)
+        conn = sqlite3.connect(output_path)
+        skip_mp_ids = get_processed_mp_ids(conn)
+        logger.info("Resuming from checkpoint: %d MPs already processed", len(skip_mp_ids))
+    else:
+        conn = schema_module.create_database_with_tables(
+            output_path, schema_path, TABLE_NAMES,
+        )
 
-    fetch_and_insert_committees(conn, timestamp_millis, mp_limit=mp_limit)
+    fetch_and_insert_committees(conn, timestamp_millis, mp_limit=mp_limit, skip_mp_ids=skip_mp_ids)
 
     logger.info("VACUUMing database to minimize file size...")
     conn.execute("VACUUM")
@@ -236,13 +264,17 @@ def main():
         "--mp-limit", type=int, default=None,
         help="Limit number of MPs fetched (for testing).",
     )
+    parser.add_argument(
+        "--checkpoint-db",
+        help="Path to a checkpoint DB to resume from (seed mode only). Skips MPs already in mp_committee_cross_ref.",
+    )
     args = parser.parse_args()
 
     if args.mode == "delta" and not args.previous_db:
         parser.error("--previous-db is required for delta mode")
 
     if args.mode == "seed":
-        build_seed(args.output, args.schema, mp_limit=args.mp_limit)
+        build_seed(args.output, args.schema, mp_limit=args.mp_limit, checkpoint_db=args.checkpoint_db)
     else:
         build_delta(args.output, args.previous_db, args.schema, mp_limit=args.mp_limit)
 

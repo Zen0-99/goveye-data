@@ -23,6 +23,20 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Check if parliament is in recess
+        id: recess_check
+        run: python check_recess.py
+
+      - name: Restore seed checkpoint
+        id: restore_checkpoint
+        if: steps.download_prev.outputs.has_previous != 'true' && steps.recess_check.outputs.skip != 'true'
+        uses: actions/cache@v4
+        with:
+          path: committees.db
+          key: committees-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
+          restore-keys: |
+            committees-seed-${{ hashFiles('schemas/bundled_schema.json') }}-
+
       - name: Download previous DB and manifest
         id: download_prev
         run: |
@@ -41,38 +55,46 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Committees database (seed mode)
-        if: steps.download_prev.outputs.has_previous != 'true'
+        if: steps.download_prev.outputs.has_previous != 'true' && steps.recess_check.outputs.skip != 'true'
         run: |
-          python build_committees.py --output committees.db --schema schemas/bundled_schema.json --mode seed
+          python build_committees.py --output committees.db --schema schemas/bundled_schema.json --mode seed --checkpoint-db committees.db
 
       - name: Build Committees database (delta mode)
-        if: steps.download_prev.outputs.has_previous == 'true'
+        if: steps.download_prev.outputs.has_previous == 'true' && steps.recess_check.outputs.skip != 'true'
         run: |
           python build_committees.py --output committees.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_committees.db
+
+      - name: Save seed checkpoint
+        if: steps.download_prev.outputs.has_previous != 'true' && steps.recess_check.outputs.skip != 'true' && always()
+        uses: actions/cache@v4
+        with:
+          path: committees.db
+          key: committees-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
 
       # Per-API DBs are intermediate artifacts, not opened by Room.
       # Schema validation happens on the merged goveye.db in build-seed.yml.
       - name: Generate diff patch
-        if: steps.download_prev.outputs.has_previous == 'true'
+        if: steps.download_prev.outputs.has_previous == 'true' && steps.recess_check.outputs.skip != 'true'
         run: |
           python diff_db.py --new committees.db --previous prev_committees.db --schema schemas/bundled_schema.json --output patch.json --tables committees,mp_committee_cross_ref
 
       - name: Generate diff patch (first run)
-        if: steps.download_prev.outputs.has_previous != 'true'
+        if: steps.download_prev.outputs.has_previous != 'true' && steps.recess_check.outputs.skip != 'true'
         run: |
           python diff_db.py --new committees.db --schema schemas/bundled_schema.json --output patch.json --tables committees,mp_committee_cross_ref
 
       - name: Generate manifest
-        if: steps.download_prev.outputs.has_previous == 'true'
+        if: steps.download_prev.outputs.has_previous == 'true' && steps.recess_check.outputs.skip != 'true'
         run: |
           python manifest.py --db committees.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json --previous-manifest prev_manifest.json
 
       - name: Generate manifest (first run)
-        if: steps.download_prev.outputs.has_previous != 'true'
+        if: steps.download_prev.outputs.has_previous != 'true' && steps.recess_check.outputs.skip != 'true'
         run: |
           python manifest.py --db committees.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json
 
       - name: Publish to GitHub Releases
+        if: steps.recess_check.outputs.skip != 'true'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: committees-latest

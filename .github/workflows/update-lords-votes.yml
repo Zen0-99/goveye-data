@@ -23,6 +23,20 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Check if parliament is in recess
+        id: recess_check
+        run: python check_recess.py
+
+      - name: Restore seed checkpoint
+        id: restore_checkpoint
+        if: steps.download_prev.outputs.has_previous != 'true' && steps.recess_check.outputs.skip != 'true'
+        uses: actions/cache@v4
+        with:
+          path: lords_votes.db
+          key: lords-votes-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
+          restore-keys: |
+            lords-votes-seed-${{ hashFiles('schemas/bundled_schema.json') }}-
+
       - name: Download previous DB and manifest
         id: download_prev
         run: |
@@ -39,36 +53,44 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Lords Votes database (seed mode)
-        if: steps.download_prev.outputs.has_previous != 'true'
+        if: steps.download_prev.outputs.has_previous != 'true' && steps.recess_check.outputs.skip != 'true'
         run: |
-          python build_lords_votes.py --output lords_votes.db --schema schemas/bundled_schema.json --mode seed
+          python build_lords_votes.py --output lords_votes.db --schema schemas/bundled_schema.json --mode seed --checkpoint-db lords_votes.db
 
       - name: Build Lords Votes database (delta mode)
-        if: steps.download_prev.outputs.has_previous == 'true'
+        if: steps.download_prev.outputs.has_previous == 'true' && steps.recess_check.outputs.skip != 'true'
         run: |
           python build_lords_votes.py --output lords_votes.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_lords_votes.db
 
+      - name: Save seed checkpoint
+        if: steps.download_prev.outputs.has_previous != 'true' && steps.recess_check.outputs.skip != 'true' && always()
+        uses: actions/cache@v4
+        with:
+          path: lords_votes.db
+          key: lords-votes-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
+
       - name: Generate diff patch
-        if: steps.download_prev.outputs.has_previous == 'true'
+        if: steps.download_prev.outputs.has_previous == 'true' && steps.recess_check.outputs.skip != 'true'
         run: |
           python diff_db.py --new lords_votes.db --previous prev_lords_votes.db --schema schemas/bundled_schema.json --output patch.json --tables divisions,division_votes
 
       - name: Generate diff patch (first run)
-        if: steps.download_prev.outputs.has_previous != 'true'
+        if: steps.download_prev.outputs.has_previous != 'true' && steps.recess_check.outputs.skip != 'true'
         run: |
           python diff_db.py --new lords_votes.db --schema schemas/bundled_schema.json --output patch.json --tables divisions,division_votes
 
       - name: Generate manifest
-        if: steps.download_prev.outputs.has_previous == 'true'
+        if: steps.download_prev.outputs.has_previous == 'true' && steps.recess_check.outputs.skip != 'true'
         run: |
           python manifest.py --db lords_votes.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json --previous-manifest prev_manifest.json
 
       - name: Generate manifest (first run)
-        if: steps.download_prev.outputs.has_previous != 'true'
+        if: steps.download_prev.outputs.has_previous != 'true' && steps.recess_check.outputs.skip != 'true'
         run: |
           python manifest.py --db lords_votes.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json
 
       - name: Publish to GitHub Releases
+        if: steps.recess_check.outputs.skip != 'true'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: lords-votes-latest

@@ -160,5 +160,129 @@ class TestCommonsDeltaNewDivisions(unittest.TestCase):
         c.close()
 
 
+class TestCommonsCheckpoint(unittest.TestCase):
+    """Test checkpoint/resume for Commons seed mode."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.tmpdir, "commons_votes.db")
+        self.checkpoint_db = os.path.join(self.tmpdir, "checkpoint.db")
+
+    def _make_checkpoint(self, div_id):
+        """Create a checkpoint DB with one Commons division."""
+        conn = schema_module.create_database_with_tables(
+            self.checkpoint_db, SCHEMA_PATH, ["divisions", "division_votes"],
+        )
+        ts = 1700000000000
+        conn.execute(
+            "INSERT OR REPLACE INTO divisions (id, title, date, publicationUpdated, "
+            "number, isDeferred, ayeCount, noCount, house, lastUpdated) "
+            "VALUES (?, 'D', '2026-01-01', NULL, ?, 0, 300, 200, 1, ?)",
+            (div_id, div_id, ts,))
+        conn.commit()
+        conn.close()
+
+    @patch("build_commons_votes.api_get")
+    def test_seed_with_checkpoint_resumes(self, mock_api_get):
+        """Checkpoint DB has division 100; seed resumes and only fetches 101+."""
+        self._make_checkpoint(100)
+
+        # API returns 100 (old) and 101 (new); only 101 should be processed
+        search_page = [make_commons_division(101), make_commons_division(100)]
+        detail = make_commons_detail(101)
+
+        def make_mock(payload):
+            m = MagicMock()
+            m.json.return_value = payload
+            m.raise_for_status = MagicMock()
+            return m
+
+        mock_api_get.side_effect = [make_mock(search_page), make_mock(detail)]
+
+        build_commons_votes.build_seed(
+            self.db_path, SCHEMA_PATH,
+            checkpoint_db=self.checkpoint_db,
+        )
+
+        c = sqlite3.connect(self.db_path)
+        total = c.execute("SELECT COUNT(*) FROM divisions WHERE house=1").fetchone()[0]
+        self.assertEqual(total, 2)  # 1 from checkpoint + 1 new
+        c.close()
+
+    @patch("build_commons_votes.api_get")
+    def test_seed_with_nonexistent_checkpoint_starts_fresh(self, mock_api_get):
+        """Non-existent checkpoint path -> fresh seed."""
+        search_page = [make_commons_division(100)]
+        detail = make_commons_detail(100)
+
+        def make_mock(payload):
+            m = MagicMock()
+            m.json.return_value = payload
+            m.raise_for_status = MagicMock()
+            return m
+
+        mock_api_get.side_effect = [make_mock(search_page), make_mock(detail)]
+
+        build_commons_votes.build_seed(
+            self.db_path, SCHEMA_PATH, divisions_limit=1,
+            checkpoint_db=os.path.join(self.tmpdir, "nonexistent.db"),
+        )
+
+        c = sqlite3.connect(self.db_path)
+        div_count = c.execute("SELECT COUNT(*) FROM divisions").fetchone()[0]
+        self.assertEqual(div_count, 1)
+        c.close()
+
+    @patch("build_commons_votes.api_get")
+    def test_seed_without_checkpoint_starts_fresh(self, mock_api_get):
+        """No checkpoint_db -> fresh seed (backward compatible)."""
+        search_page = [make_commons_division(100)]
+        detail = make_commons_detail(100)
+
+        def make_mock(payload):
+            m = MagicMock()
+            m.json.return_value = payload
+            m.raise_for_status = MagicMock()
+            return m
+
+        mock_api_get.side_effect = [make_mock(search_page), make_mock(detail)]
+
+        build_commons_votes.build_seed(self.db_path, SCHEMA_PATH, divisions_limit=1)
+
+        c = sqlite3.connect(self.db_path)
+        div_count = c.execute("SELECT COUNT(*) FROM divisions").fetchone()[0]
+        self.assertEqual(div_count, 1)
+        c.close()
+
+    @patch("build_commons_votes.api_get")
+    def test_checkpoint_same_as_output(self, mock_api_get):
+        """--checkpoint-db and --output same path -> no truncation, resumes."""
+        self._make_checkpoint(100)
+        import shutil
+        shutil.copy2(self.checkpoint_db, self.db_path)
+
+        # API returns 100 (old) and 101 (new); only 101 should be processed
+        search_page = [make_commons_division(101), make_commons_division(100)]
+        detail = make_commons_detail(101)
+
+        def make_mock(payload):
+            m = MagicMock()
+            m.json.return_value = payload
+            m.raise_for_status = MagicMock()
+            return m
+
+        mock_api_get.side_effect = [make_mock(search_page), make_mock(detail)]
+
+        build_commons_votes.build_seed(
+            self.db_path, SCHEMA_PATH,
+            checkpoint_db=self.db_path,  # Same path
+        )
+
+        c = sqlite3.connect(self.db_path)
+        total = c.execute("SELECT COUNT(*) FROM divisions WHERE house=1").fetchone()[0]
+        self.assertEqual(total, 2)
+        c.close()
+
+
 if __name__ == "__main__":
     unittest.main()

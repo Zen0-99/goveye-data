@@ -1,7 +1,9 @@
 name: Build Seed
 
 on:
-  workflow_dispatch:  # Manual trigger only — the seed is built on demand
+  schedule:
+    - cron: '0 5 * * 0'  # Weekly, Sunday 5am UTC
+  workflow_dispatch:  # Manual trigger still available
 
 permissions:
   contents: write  # Required by softprops/action-gh-release@v3
