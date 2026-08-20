@@ -250,7 +250,7 @@ class TestMergeDbs(unittest.TestCase):
         hash_val = c.execute(
             "SELECT identity_hash FROM room_master_table WHERE id=42"
         ).fetchone()[0]
-        self.assertEqual(hash_val, "aed5eaea3808b15abb72f1c1e89835f9")
+        self.assertEqual(hash_val, "ebd3a258ffd1c36a696959347543c45a")
         c.close()
 
     def test_merge_fts_populated(self):

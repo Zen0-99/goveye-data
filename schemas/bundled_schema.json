@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 2,
-    "identityHash": "aed5eaea3808b15abb72f1c1e89835f9",
+    "identityHash": "ebd3a258ffd1c36a696959347543c45a",
     "entities": [
       {
         "tableName": "mps",
@@ -782,7 +782,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'aed5eaea3808b15abb72f1c1e89835f9')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'ebd3a258ffd1c36a696959347543c45a')"
     ]
   }
 }
