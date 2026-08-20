@@ -1,4 +1,4 @@
-name: Update Votes
+name: Update Commons Votes
 
 on:
   schedule:
@@ -11,7 +11,7 @@ permissions:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 60  # Votes fetch can be slow — thousands of divisions with detail fetches
+    timeout-minutes: 45  # Commons divisions with detail fetches
 
     steps:
       - uses: actions/checkout@v4
@@ -26,13 +26,11 @@ jobs:
       - name: Download previous DB and manifest
         id: download_prev
         run: |
-          # Attempt to download previous votes.db and manifest.json from the votes-latest release.
-          # If this fails (first run, no previous release), we proceed in seed mode.
-          gh release download votes-latest \
-            --pattern votes.db --output prev_votes.db || echo "No previous DB (first run)"
-          gh release download votes-latest \
+          gh release download commons-votes-latest \
+            --pattern commons_votes.db --output prev_commons_votes.db || echo "No previous DB (first run)"
+          gh release download commons-votes-latest \
             --pattern manifest.json --output prev_manifest.json || echo "No previous manifest (first run)"
-          if [ -f prev_votes.db ]; then
+          if [ -f prev_commons_votes.db ]; then
             echo "has_previous=true" >> $GITHUB_OUTPUT
           else
             echo "has_previous=false" >> $GITHUB_OUTPUT
@@ -40,54 +38,51 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Votes database (seed mode)
+      - name: Build Commons Votes database (seed mode)
         if: steps.download_prev.outputs.has_previous != 'true'
         run: |
-          python build_votes.py --output votes.db --schema schemas/bundled_schema.json --mode seed
+          python build_commons_votes.py --output commons_votes.db --schema schemas/bundled_schema.json --mode seed
 
-      - name: Build Votes database (delta mode)
+      - name: Build Commons Votes database (delta mode)
         if: steps.download_prev.outputs.has_previous == 'true'
         run: |
-          python build_votes.py --output votes.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_votes.db
+          python build_commons_votes.py --output commons_votes.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_commons_votes.db
 
       # Per-API DBs are intermediate artifacts, not opened by Room.
       # Schema validation happens on the merged goveye.db in build-seed.yml.
       - name: Generate diff patch
         if: steps.download_prev.outputs.has_previous == 'true'
         run: |
-          python diff_db.py --new votes.db --previous prev_votes.db --schema schemas/bundled_schema.json --output patch.json --tables divisions,division_votes
+          python diff_db.py --new commons_votes.db --previous prev_commons_votes.db --schema schemas/bundled_schema.json --output patch.json --tables divisions,division_votes
 
       - name: Generate diff patch (first run)
         if: steps.download_prev.outputs.has_previous != 'true'
         run: |
-          python diff_db.py --new votes.db --schema schemas/bundled_schema.json --output patch.json --tables divisions,division_votes
+          python diff_db.py --new commons_votes.db --schema schemas/bundled_schema.json --output patch.json --tables divisions,division_votes
 
       - name: Generate manifest
         if: steps.download_prev.outputs.has_previous == 'true'
         run: |
-          python manifest.py --db votes.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json --previous-manifest prev_manifest.json
+          python manifest.py --db commons_votes.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json --previous-manifest prev_manifest.json
 
       - name: Generate manifest (first run)
         if: steps.download_prev.outputs.has_previous != 'true'
         run: |
-          python manifest.py --db votes.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json
+          python manifest.py --db commons_votes.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json
 
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: votes-latest
-          name: Votes Latest
+          tag_name: commons-votes-latest
+          name: Commons Votes Latest
           body: |
-            Votes database update for GovEye (4x daily per D-09).
+            Commons Votes database update for GovEye (4x daily per D-09).
 
-            - **votes.db**: Per-API SQLite database (divisions + division_votes tables only)
+            - **commons_votes.db**: Per-API SQLite database (Commons divisions + division_votes, house=1 only)
             - **patch.json**: Incremental diff patch (divisions + division_votes)
             - **manifest.json**: Version, SHA-256 hashes, and file sizes
-
-            Commons divisions are fetched first and committed; Lords fetch
-            failures do not block the publish (resilience design).
           files: |
-            votes.db
+            commons_votes.db
             patch.json
             manifest.json
         env:

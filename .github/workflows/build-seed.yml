@@ -21,10 +21,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Build all 5 per-API databases (seed mode)
+      - name: Build all 6 per-API databases (seed mode)
         run: |
           python build_mps.py --output mps.db --schema schemas/bundled_schema.json --mode seed
-          python build_votes.py --output votes.db --schema schemas/bundled_schema.json --mode seed
+          python build_commons_votes.py --output commons_votes.db --schema schemas/bundled_schema.json --mode seed
+          python build_lords_votes.py --output lords_votes.db --schema schemas/bundled_schema.json --mode seed
           python build_bills.py --output bills.db --schema schemas/bundled_schema.json --mode seed
           python build_committees.py --output committees.db --schema schemas/bundled_schema.json --mode seed
           python build_recess.py --output recess.db --schema schemas/bundled_schema.json --mode seed
@@ -32,8 +33,8 @@ jobs:
       - name: Merge per-API DBs into goveye.db
         run: |
           python merge_dbs.py --output goveye.db --schema schemas/bundled_schema.json \
-            --mps-db mps.db --votes-db votes.db --bills-db bills.db \
-            --committees-db committees.db --recess-db recess.db
+            --mps-db mps.db --commons-votes-db commons_votes.db --lords-votes-db lords_votes.db \
+            --bills-db bills.db --committees-db committees.db --recess-db recess.db
 
       - name: Validate merged schema
         run: |

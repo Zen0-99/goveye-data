@@ -1,4 +1,4 @@
-"""Unit tests for merge_dbs.py — combines 5 per-API DBs into goveye.db.
+"""Unit tests for merge_dbs.py — combines 6 per-API DBs into goveye.db.
 
 Uses create_database_with_tables to build small per-API DBs with test data,
 runs merge_dbs, and verifies all 16 tables exist, data is copied, the
@@ -18,7 +18,7 @@ import merge_dbs
 
 SCHEMA_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "schemas", "8.json",
+    "schemas", "bundled_schema.json",
 )
 
 
@@ -44,8 +44,8 @@ def make_mps_db(path, count=2):
     conn.close()
 
 
-def make_votes_db(path, count=2):
-    """Create a votes.db with a few test divisions."""
+def make_commons_votes_db(path, count=2):
+    """Create a commons_votes.db with a few test Commons divisions (house=1)."""
     conn = schema_module.create_database_with_tables(
         path, SCHEMA_PATH, ["divisions", "division_votes"],
     )
@@ -56,7 +56,25 @@ def make_votes_db(path, count=2):
             "publicationUpdated, number, isDeferred, ayeCount, noCount, "
             "house, lastUpdated) VALUES (?, ?, '2026-01-01', NULL, ?, 0, "
             "300, 200, 1, ?)",
-            (100 + i, f"Division {i}", 100 + i, ts),
+            (100 + i, f"Commons Division {i}", 100 + i, ts),
+        )
+    conn.commit()
+    conn.close()
+
+
+def make_lords_votes_db(path, count=2):
+    """Create a lords_votes.db with a few test Lords divisions (house=2)."""
+    conn = schema_module.create_database_with_tables(
+        path, SCHEMA_PATH, ["divisions", "division_votes"],
+    )
+    ts = 1700000000000
+    for i in range(1, count + 1):
+        conn.execute(
+            "INSERT OR REPLACE INTO divisions (id, title, date, "
+            "publicationUpdated, number, isDeferred, ayeCount, noCount, "
+            "house, lastUpdated) VALUES (?, ?, '2026-01-02', NULL, ?, 0, "
+            "100, 50, 2, ?)",
+            (200 + i, f"Lords Division {i}", 200 + i, ts),
         )
     conn.commit()
     conn.close()
@@ -129,7 +147,8 @@ class TestMergeDbs(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
         self.mps_db = os.path.join(self.tmpdir, "mps.db")
-        self.votes_db = os.path.join(self.tmpdir, "votes.db")
+        self.commons_votes_db = os.path.join(self.tmpdir, "commons_votes.db")
+        self.lords_votes_db = os.path.join(self.tmpdir, "lords_votes.db")
         self.bills_db = os.path.join(self.tmpdir, "bills.db")
         self.committees_db = os.path.join(self.tmpdir, "committees.db")
         self.recess_db = os.path.join(self.tmpdir, "recess.db")
@@ -138,14 +157,17 @@ class TestMergeDbs(unittest.TestCase):
     def test_merge_creates_all_tables(self):
         """Merged goveye.db has all 16 tables."""
         make_mps_db(self.mps_db)
-        make_votes_db(self.votes_db)
+        make_commons_votes_db(self.commons_votes_db)
+        make_lords_votes_db(self.lords_votes_db)
         make_bills_db(self.bills_db)
         make_committees_db(self.committees_db)
         make_recess_db(self.recess_db)
 
         merge_dbs.merge_dbs(
             self.goveye_db, SCHEMA_PATH,
-            mps_db=self.mps_db, votes_db=self.votes_db,
+            mps_db=self.mps_db,
+            commons_votes_db=self.commons_votes_db,
+            lords_votes_db=self.lords_votes_db,
             bills_db=self.bills_db, committees_db=self.committees_db,
             recess_db=self.recess_db,
         )
@@ -166,11 +188,14 @@ class TestMergeDbs(unittest.TestCase):
     def test_merge_copies_data(self):
         """Data from per-API DBs appears in merged goveye.db."""
         make_mps_db(self.mps_db, count=3)
-        make_votes_db(self.votes_db, count=2)
+        make_commons_votes_db(self.commons_votes_db, count=2)
+        make_lords_votes_db(self.lords_votes_db, count=1)
 
         merge_dbs.merge_dbs(
             self.goveye_db, SCHEMA_PATH,
-            mps_db=self.mps_db, votes_db=self.votes_db,
+            mps_db=self.mps_db,
+            commons_votes_db=self.commons_votes_db,
+            lords_votes_db=self.lords_votes_db,
             bills_db=None, committees_db=None, recess_db=None,
         )
 
@@ -178,7 +203,7 @@ class TestMergeDbs(unittest.TestCase):
         mp_count = c.execute("SELECT COUNT(*) FROM mps").fetchone()[0]
         self.assertEqual(mp_count, 3)
         div_count = c.execute("SELECT COUNT(*) FROM divisions").fetchone()[0]
-        self.assertEqual(div_count, 2)
+        self.assertEqual(div_count, 3)  # 2 Commons + 1 Lords
         c.close()
 
     def test_merge_identity_hash(self):
@@ -187,15 +212,16 @@ class TestMergeDbs(unittest.TestCase):
 
         merge_dbs.merge_dbs(
             self.goveye_db, SCHEMA_PATH,
-            mps_db=self.mps_db, votes_db=None, bills_db=None,
-            committees_db=None, recess_db=None,
+            mps_db=self.mps_db,
+            commons_votes_db=None, lords_votes_db=None,
+            bills_db=None, committees_db=None, recess_db=None,
         )
 
         c = sqlite3.connect(self.goveye_db)
         hash_val = c.execute(
             "SELECT identity_hash FROM room_master_table WHERE id=42"
         ).fetchone()[0]
-        self.assertEqual(hash_val, "187aeb854a2e69de65200c666d6555d1")
+        self.assertEqual(hash_val, "aed5eaea3808b15abb72f1c1e89835f9")
         c.close()
 
     def test_merge_fts_populated(self):
@@ -204,8 +230,9 @@ class TestMergeDbs(unittest.TestCase):
 
         merge_dbs.merge_dbs(
             self.goveye_db, SCHEMA_PATH,
-            mps_db=self.mps_db, votes_db=None, bills_db=None,
-            committees_db=None, recess_db=None,
+            mps_db=self.mps_db,
+            commons_votes_db=None, lords_votes_db=None,
+            bills_db=None, committees_db=None, recess_db=None,
         )
 
         c = sqlite3.connect(self.goveye_db)
@@ -220,8 +247,9 @@ class TestMergeDbs(unittest.TestCase):
 
         merge_dbs.merge_dbs(
             self.goveye_db, SCHEMA_PATH,
-            mps_db=self.mps_db, votes_db=None, bills_db=None,
-            committees_db=None, recess_db=None,
+            mps_db=self.mps_db,
+            commons_votes_db=None, lords_votes_db=None,
+            bills_db=None, committees_db=None, recess_db=None,
         )
 
         c = sqlite3.connect(self.goveye_db)

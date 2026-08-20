@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Merge the 5 per-API DBs into one goveye.db (D-10a).
+"""Merge the 6 per-API DBs into one goveye.db (D-10a).
 
-Combines mps.db, votes.db, bills.db, committees.db, and recess.db into a
-single goveye.db with all 16 tables + the correct Room identity hash. Used
-for the seed release only (the first-launch download source, D-04).
+Combines mps.db, commons_votes.db, lords_votes.db, bills.db, committees.db,
+and recess.db into a single goveye.db with all 16 tables + the correct Room
+identity hash. Used for the seed release only (the first-launch download
+source, D-04).
+
+Commons and Lords votes are separate per-API DBs that both write to the
+divisions + division_votes tables. Commons divisions have house=1, Lords
+have house=2 — their IDs come from different API systems and do not
+overlap. Both are merged via INSERT OR REPLACE into the same tables.
 
 Implementation:
   1. Create goveye.db with ALL 16 tables + FTS triggers + room_master_table
@@ -22,9 +28,9 @@ created at runtime by LocalDatabase per D-10a).
 Missing per-API DBs are handled gracefully (skip with warning, table empty).
 
 Usage:
-  python merge_dbs.py --output goveye.db --schema schemas/8.json \
-      --mps-db mps.db --votes-db votes.db --bills-db bills.db \
-      --committees-db committees.db --recess-db recess.db
+  python merge_dbs.py --output goveye.db --schema schemas/bundled_schema.json \
+      --mps-db mps.db --commons-votes-db commons_votes.db --lords-votes-db lords_votes.db \
+      --bills-db bills.db --committees-db committees.db --recess-db recess.db
 """
 
 import argparse
@@ -37,22 +43,24 @@ from api_helper import logger
 # Maps each per-API DB arg name to (api_name, table_names)
 SOURCE_MAP = [
     ("mps_db", "mps", ["mps", "mps_fts"]),
-    ("votes_db", "votes", ["divisions", "division_votes"]),
+    ("commons_votes_db", "commons_votes", ["divisions", "division_votes"]),
+    ("lords_votes_db", "lords_votes", ["divisions", "division_votes"]),
     ("bills_db", "bills", ["bills", "bill_stages"]),
     ("committees_db", "committees", ["committees", "mp_committee_cross_ref"]),
     ("recess_db", "recess", ["recess_dates", "recess_dates_meta"]),
 ]
 
 
-def merge_dbs(output_path, schema_path, mps_db, votes_db, bills_db,
-              committees_db, recess_db):
-    """Merge the 5 per-API DBs into one goveye.db.
+def merge_dbs(output_path, schema_path, mps_db, commons_votes_db,
+              lords_votes_db, bills_db, committees_db, recess_db):
+    """Merge the 6 per-API DBs into one goveye.db.
 
     Args:
         output_path: Path for the merged goveye.db.
-        schema_path: Path to the Room schema JSON (8.json).
-        mps_db, votes_db, bills_db, committees_db, recess_db: Paths to the
-            5 per-API DBs. Any may be None or missing (skipped with warning).
+        schema_path: Path to the Room schema JSON (bundled_schema.json).
+        mps_db, commons_votes_db, lords_votes_db, bills_db, committees_db,
+        recess_db: Paths to the 6 per-API DBs. Any may be None or missing
+        (skipped with warning).
     """
     all_table_names = schema_module.get_all_table_names(schema_path)
 
@@ -64,7 +72,8 @@ def merge_dbs(output_path, schema_path, mps_db, votes_db, bills_db,
 
     sources = {
         "mps_db": mps_db,
-        "votes_db": votes_db,
+        "commons_votes_db": commons_votes_db,
+        "lords_votes_db": lords_votes_db,
         "bills_db": bills_db,
         "committees_db": committees_db,
         "recess_db": recess_db,
@@ -120,7 +129,7 @@ def merge_dbs(output_path, schema_path, mps_db, votes_db, bills_db,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Merge the 5 per-API DBs into one goveye.db (seed release)."
+        description="Merge the 6 per-API DBs into one goveye.db (seed release)."
     )
     parser.add_argument(
         "--output", default="goveye.db",
@@ -128,10 +137,11 @@ def main():
     )
     parser.add_argument(
         "--schema", required=True,
-        help="Path to the Room exported schema JSON (8.json).",
+        help="Path to the Room exported schema JSON (bundled_schema.json).",
     )
     parser.add_argument("--mps-db", default=None, help="Path to mps.db")
-    parser.add_argument("--votes-db", default=None, help="Path to votes.db")
+    parser.add_argument("--commons-votes-db", default=None, help="Path to commons_votes.db")
+    parser.add_argument("--lords-votes-db", default=None, help="Path to lords_votes.db")
     parser.add_argument("--bills-db", default=None, help="Path to bills.db")
     parser.add_argument("--committees-db", default=None, help="Path to committees.db")
     parser.add_argument("--recess-db", default=None, help="Path to recess.db")
@@ -140,7 +150,8 @@ def main():
     merge_dbs(
         args.output, args.schema,
         mps_db=args.mps_db,
-        votes_db=args.votes_db,
+        commons_votes_db=args.commons_votes_db,
+        lords_votes_db=args.lords_votes_db,
         bills_db=args.bills_db,
         committees_db=args.committees_db,
         recess_db=args.recess_db,
