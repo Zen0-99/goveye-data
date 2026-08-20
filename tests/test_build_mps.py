@@ -4,6 +4,7 @@ Uses mocked api_get to avoid hitting the real Parliament API.
 """
 
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -178,6 +179,105 @@ class TestDeltaUpsert(unittest.TestCase):
             "SELECT partyName FROM mps WHERE id=1"
         ).fetchone()[0]
         self.assertEqual(party, "Conservative")
+        c.close()
+
+
+class TestMpsCheckpoint(unittest.TestCase):
+    """Test checkpoint/resume for MPs seed mode."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.tmpdir, "mps.db")
+        self.checkpoint_db = os.path.join(self.tmpdir, "checkpoint.db")
+
+    def _make_checkpoint(self, mp_ids):
+        """Create a checkpoint DB with the given MP IDs."""
+        conn = schema_module.create_database_with_tables(
+            self.checkpoint_db, SCHEMA_PATH, ["mps", "mps_fts"],
+        )
+        mps = [make_member_dto(mid) for mid in mp_ids]
+        build_mps.insert_mps(conn, mps, 1700000000000)
+        conn.close()
+
+    @patch("build_mps.api_get")
+    def test_seed_with_checkpoint_upserts(self, mock_api_get):
+        """Checkpoint DB has MP 1; seed upserts MP 1 + inserts MP 2."""
+        self._make_checkpoint([1])
+
+        # API returns MPs 1 and 2
+        page = {"items": [{"value": make_member_dto(1)}, {"value": make_member_dto(2)}]}
+        mock_response = MagicMock()
+        mock_response.json.return_value = page
+        mock_response.raise_for_status = MagicMock()
+        mock_api_get.return_value = mock_response
+
+        build_mps.build_seed(
+            self.db_path, SCHEMA_PATH, mp_limit=2,
+            checkpoint_db=self.checkpoint_db,
+        )
+
+        c = sqlite3.connect(self.db_path)
+        count = c.execute("SELECT COUNT(*) FROM mps").fetchone()[0]
+        self.assertEqual(count, 2)  # MP 1 (upserted) + MP 2 (new)
+        c.close()
+
+    @patch("build_mps.api_get")
+    def test_seed_with_nonexistent_checkpoint_starts_fresh(self, mock_api_get):
+        """Non-existent checkpoint path -> fresh seed."""
+        page = {"items": [{"value": make_member_dto(1)}]}
+        mock_response = MagicMock()
+        mock_response.json.return_value = page
+        mock_response.raise_for_status = MagicMock()
+        mock_api_get.return_value = mock_response
+
+        build_mps.build_seed(
+            self.db_path, SCHEMA_PATH, mp_limit=1,
+            checkpoint_db=os.path.join(self.tmpdir, "nonexistent.db"),
+        )
+
+        c = sqlite3.connect(self.db_path)
+        count = c.execute("SELECT COUNT(*) FROM mps").fetchone()[0]
+        self.assertEqual(count, 1)
+        c.close()
+
+    @patch("build_mps.api_get")
+    def test_seed_without_checkpoint_starts_fresh(self, mock_api_get):
+        """No checkpoint_db -> fresh seed (backward compatible)."""
+        page = {"items": [{"value": make_member_dto(1)}]}
+        mock_response = MagicMock()
+        mock_response.json.return_value = page
+        mock_response.raise_for_status = MagicMock()
+        mock_api_get.return_value = mock_response
+
+        build_mps.build_seed(self.db_path, SCHEMA_PATH, mp_limit=1)
+
+        c = sqlite3.connect(self.db_path)
+        count = c.execute("SELECT COUNT(*) FROM mps").fetchone()[0]
+        self.assertEqual(count, 1)
+        c.close()
+
+    @patch("build_mps.api_get")
+    def test_checkpoint_same_as_output(self, mock_api_get):
+        """--checkpoint-db and --output same path -> no truncation, upserts."""
+        self._make_checkpoint([1])
+        import shutil
+        shutil.copy2(self.checkpoint_db, self.db_path)
+
+        # API returns MPs 1 and 2
+        page = {"items": [{"value": make_member_dto(1)}, {"value": make_member_dto(2)}]}
+        mock_response = MagicMock()
+        mock_response.json.return_value = page
+        mock_response.raise_for_status = MagicMock()
+        mock_api_get.return_value = mock_response
+
+        build_mps.build_seed(
+            self.db_path, SCHEMA_PATH, mp_limit=2,
+            checkpoint_db=self.db_path,  # Same path
+        )
+
+        c = sqlite3.connect(self.db_path)
+        count = c.execute("SELECT COUNT(*) FROM mps").fetchone()[0]
+        self.assertEqual(count, 2)
         c.close()
 
 

@@ -181,5 +181,109 @@ class TestDeltaRecess(unittest.TestCase):
         c.close()
 
 
+class TestRecessCheckpoint(unittest.TestCase):
+    """Test checkpoint/resume for recess seed mode."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.tmpdir, "recess.db")
+        self.checkpoint_db = os.path.join(self.tmpdir, "checkpoint.db")
+
+    def _make_checkpoint(self):
+        """Create a checkpoint DB with old recess data."""
+        conn = schema_module.create_database_with_tables(
+            self.checkpoint_db, SCHEMA_PATH, ["recess_dates", "recess_dates_meta"],
+        )
+        build_recess.insert_recess_dates(
+            conn, 1, [("Old recess", "2025-01-01", "2025-01-10")], 1700000000000,
+        )
+        build_recess.update_recess_meta(conn, 1, 1700000000000)
+        conn.close()
+
+    @patch("build_recess.api_get")
+    def test_seed_with_checkpoint_refetches(self, mock_api_get):
+        """Checkpoint DB has old data; seed clears and re-fetches fresh data."""
+        self._make_checkpoint()
+
+        mock_resp = MagicMock()
+        mock_resp.text = SAMPLE_HTML
+        mock_resp.raise_for_status = MagicMock()
+        mock_api_get.side_effect = [mock_resp, mock_resp]
+
+        build_recess.build_seed(
+            self.db_path, SCHEMA_PATH,
+            checkpoint_db=self.checkpoint_db,
+        )
+
+        c = sqlite3.connect(self.db_path)
+        # Old "Old recess" row should be gone; 4 new rows (2 per house)
+        recess_count = c.execute("SELECT COUNT(*) FROM recess_dates").fetchone()[0]
+        self.assertEqual(recess_count, 4)
+        old = c.execute(
+            "SELECT COUNT(*) FROM recess_dates WHERE description='Old recess'"
+        ).fetchone()[0]
+        self.assertEqual(old, 0)
+        c.close()
+
+    @patch("build_recess.api_get")
+    def test_seed_with_nonexistent_checkpoint_starts_fresh(self, mock_api_get):
+        """Non-existent checkpoint path -> fresh seed."""
+        mock_resp = MagicMock()
+        mock_resp.text = SAMPLE_HTML
+        mock_resp.raise_for_status = MagicMock()
+        mock_api_get.side_effect = [mock_resp, mock_resp]
+
+        build_recess.build_seed(
+            self.db_path, SCHEMA_PATH,
+            checkpoint_db=os.path.join(self.tmpdir, "nonexistent.db"),
+        )
+
+        c = sqlite3.connect(self.db_path)
+        recess_count = c.execute("SELECT COUNT(*) FROM recess_dates").fetchone()[0]
+        self.assertEqual(recess_count, 4)
+        c.close()
+
+    @patch("build_recess.api_get")
+    def test_seed_without_checkpoint_starts_fresh(self, mock_api_get):
+        """No checkpoint_db -> fresh seed (backward compatible)."""
+        mock_resp = MagicMock()
+        mock_resp.text = SAMPLE_HTML
+        mock_resp.raise_for_status = MagicMock()
+        mock_api_get.side_effect = [mock_resp, mock_resp]
+
+        build_recess.build_seed(self.db_path, SCHEMA_PATH)
+
+        c = sqlite3.connect(self.db_path)
+        recess_count = c.execute("SELECT COUNT(*) FROM recess_dates").fetchone()[0]
+        self.assertEqual(recess_count, 4)
+        c.close()
+
+    @patch("build_recess.api_get")
+    def test_checkpoint_same_as_output(self, mock_api_get):
+        """--checkpoint-db and --output same path -> no truncation, re-fetches."""
+        self._make_checkpoint()
+        import shutil
+        shutil.copy2(self.checkpoint_db, self.db_path)
+
+        mock_resp = MagicMock()
+        mock_resp.text = SAMPLE_HTML
+        mock_resp.raise_for_status = MagicMock()
+        mock_api_get.side_effect = [mock_resp, mock_resp]
+
+        build_recess.build_seed(
+            self.db_path, SCHEMA_PATH,
+            checkpoint_db=self.db_path,  # Same path
+        )
+
+        c = sqlite3.connect(self.db_path)
+        recess_count = c.execute("SELECT COUNT(*) FROM recess_dates").fetchone()[0]
+        self.assertEqual(recess_count, 4)
+        old = c.execute(
+            "SELECT COUNT(*) FROM recess_dates WHERE description='Old recess'"
+        ).fetchone()[0]
+        self.assertEqual(old, 0)
+        c.close()
+
+
 if __name__ == "__main__":
     unittest.main()

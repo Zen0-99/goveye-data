@@ -23,6 +23,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Restore seed checkpoint
+        id: restore_checkpoint
+        if: steps.download_prev.outputs.has_previous != 'true'
+        uses: actions/cache@v4
+        with:
+          path: interests.db
+          key: interests-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
+          restore-keys: |
+            interests-seed-${{ hashFiles('schemas/bundled_schema.json') }}-
+
       - name: Download previous DB and manifest
         id: download_prev
         run: |
@@ -43,12 +53,19 @@ jobs:
       - name: Build Interests database (seed mode)
         if: steps.download_prev.outputs.has_previous != 'true'
         run: |
-          python build_interests.py --output interests.db --schema schemas/bundled_schema.json --mode seed
+          python build_interests.py --output interests.db --schema schemas/bundled_schema.json --mode seed --checkpoint-db interests.db
 
       - name: Build Interests database (delta mode)
         if: steps.download_prev.outputs.has_previous == 'true'
         run: |
           python build_interests.py --output interests.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_interests.db
+
+      - name: Save seed checkpoint
+        if: steps.download_prev.outputs.has_previous != 'true' && always()
+        uses: actions/cache@v4
+        with:
+          path: interests.db
+          key: interests-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
 
       # Per-API DBs are intermediate artifacts, not opened by Room.
       # Schema validation happens on the merged goveye.db in build-seed.yml.

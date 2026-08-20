@@ -19,6 +19,7 @@ Usage:
 """
 
 import argparse
+import os
 import re
 import shutil
 import sqlite3
@@ -168,13 +169,27 @@ def fetch_and_insert_recess(conn, timestamp_millis):
         time.sleep(API_DELAY)
 
 
-def build_seed(output_path, schema_path):
-    """Seed mode: create fresh DB, fetch + insert recess dates for both houses."""
+def build_seed(output_path, schema_path, checkpoint_db=None):
+    """Seed mode: create fresh DB, fetch + insert recess dates for both houses.
+
+    If checkpoint_db exists, copies it and re-fetches (recess dates are tiny
+    and can change, so we always re-fetch both houses — the checkpoint just
+    preserves the DB structure and any previously fetched data).
+    """
     timestamp_millis = int(time.time() * 1000)
 
-    conn = schema_module.create_database_with_tables(
-        output_path, schema_path, TABLE_NAMES,
-    )
+    if checkpoint_db and os.path.exists(checkpoint_db):
+        if os.path.abspath(checkpoint_db) != os.path.abspath(output_path):
+            shutil.copy2(checkpoint_db, output_path)
+        conn = sqlite3.connect(output_path)
+        # Clear old data and re-fetch (recess dates can change)
+        conn.execute("DELETE FROM recess_dates")
+        conn.commit()
+        logger.info("Resuming from checkpoint: cleared old recess dates, re-fetching")
+    else:
+        conn = schema_module.create_database_with_tables(
+            output_path, schema_path, TABLE_NAMES,
+        )
 
     fetch_and_insert_recess(conn, timestamp_millis)
 
@@ -231,13 +246,17 @@ def main():
         "--previous-db",
         help="Path to previous DB file (required for delta mode).",
     )
+    parser.add_argument(
+        "--checkpoint-db",
+        help="Path to a checkpoint DB to resume from (seed mode only). Re-fetches recess dates on top of existing DB.",
+    )
     args = parser.parse_args()
 
     if args.mode == "delta" and not args.previous_db:
         parser.error("--previous-db is required for delta mode")
 
     if args.mode == "seed":
-        build_seed(args.output, args.schema)
+        build_seed(args.output, args.schema, checkpoint_db=args.checkpoint_db)
     else:
         build_delta(args.output, args.previous_db, args.schema)
 

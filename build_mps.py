@@ -17,6 +17,7 @@ Usage:
 """
 
 import argparse
+import os
 import shutil
 import sqlite3
 import time
@@ -166,13 +167,32 @@ def insert_mps(conn, mps, timestamp_millis):
 
 # --- Build modes ---
 
-def build_seed(output_path, schema_path, mp_limit=None):
-    """Seed mode: create fresh DB, fetch all MPs, insert."""
+def get_processed_mp_ids(conn):
+    """Get the set of MP IDs already in the checkpoint DB."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM mps")
+    return {row[0] for row in cursor.fetchall()}
+
+
+def build_seed(output_path, schema_path, mp_limit=None, checkpoint_db=None):
+    """Seed mode: create fresh DB, fetch all MPs, insert.
+
+    If checkpoint_db exists and has data, upserts on top of it (INSERT OR REPLACE
+    handles dedup). MPs already in the DB are re-upserted (list data is cheap,
+    no per-MP detail calls).
+    """
     timestamp_millis = int(time.time() * 1000)
 
-    conn = schema_module.create_database_with_tables(
-        output_path, schema_path, TABLE_NAMES,
-    )
+    if checkpoint_db and os.path.exists(checkpoint_db):
+        if os.path.abspath(checkpoint_db) != os.path.abspath(output_path):
+            shutil.copy2(checkpoint_db, output_path)
+        conn = sqlite3.connect(output_path)
+        existing = get_processed_mp_ids(conn)
+        logger.info("Resuming from checkpoint: %d MPs already in DB", len(existing))
+    else:
+        conn = schema_module.create_database_with_tables(
+            output_path, schema_path, TABLE_NAMES,
+        )
 
     mps = fetch_all_mps(mp_limit=mp_limit)
     if mps:
@@ -229,13 +249,17 @@ def main():
         "--mp-limit", type=int, default=None,
         help="Limit number of MPs fetched (for testing).",
     )
+    parser.add_argument(
+        "--checkpoint-db",
+        help="Path to a checkpoint DB to resume from (seed mode only). Upserts on top of existing data.",
+    )
     args = parser.parse_args()
 
     if args.mode == "delta" and not args.previous_db:
         parser.error("--previous-db is required for delta mode")
 
     if args.mode == "seed":
-        build_seed(args.output, args.schema, mp_limit=args.mp_limit)
+        build_seed(args.output, args.schema, mp_limit=args.mp_limit, checkpoint_db=args.checkpoint_db)
     else:
         build_delta(args.output, args.previous_db, args.schema, mp_limit=args.mp_limit)
 

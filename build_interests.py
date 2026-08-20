@@ -22,6 +22,7 @@ Usage:
 
 import argparse
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -298,23 +299,41 @@ def fetch_interests_for_mp(member_id):
     return interests
 
 
-def fetch_all_interests(mp_limit=None):
+def get_processed_mp_ids(conn):
+    """Get the set of MP IDs that already have interests in the checkpoint DB."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT memberId FROM interests")
+    return {row[0] for row in cursor.fetchall()}
+
+
+def fetch_all_interests(mp_limit=None, skip_mp_ids=None):
     """Fetch all interests for all current Commons MPs.
 
     1. Fetch all MP IDs.
     2. For each MP, fetch all their interests.
     3. Return the combined list.
+
+    If skip_mp_ids is provided, those MPs are skipped (already in checkpoint).
     """
+    if skip_mp_ids is None:
+        skip_mp_ids = set()
     mp_ids = fetch_all_mp_ids(mp_limit=mp_limit)
     all_interests = []
+    skipped = 0
 
     for i, mp_id in enumerate(mp_ids, 1):
+        if mp_id in skip_mp_ids:
+            skipped += 1
+            continue
         logger.info("Fetching interests for MP %d/%d (id=%d)", i, len(mp_ids), mp_id)
         interests = fetch_interests_for_mp(mp_id)
         all_interests.extend(interests)
         time.sleep(API_DELAY)
 
-    logger.info("Fetched %d total interests across %d MPs", len(all_interests), len(mp_ids))
+    logger.info(
+        "Fetched %d total interests across %d MPs (%d skipped from checkpoint)",
+        len(all_interests), len(mp_ids), skipped,
+    )
     return all_interests
 
 
@@ -377,15 +396,26 @@ def insert_interests(conn, interests, timestamp_millis):
 
 # --- Build modes ---
 
-def build_seed(output_path, schema_path, mp_limit=None):
-    """Seed mode: create fresh DB, fetch all interests, insert."""
+def build_seed(output_path, schema_path, mp_limit=None, checkpoint_db=None):
+    """Seed mode: create fresh DB, fetch all interests, insert.
+
+    If checkpoint_db exists and has data, skip MPs already in the interests table.
+    """
     timestamp_millis = int(time.time() * 1000)
+    skip_mp_ids = set()
 
-    conn = schema_module.create_database_with_tables(
-        output_path, schema_path, TABLE_NAMES,
-    )
+    if checkpoint_db and os.path.exists(checkpoint_db):
+        if os.path.abspath(checkpoint_db) != os.path.abspath(output_path):
+            shutil.copy2(checkpoint_db, output_path)
+        conn = sqlite3.connect(output_path)
+        skip_mp_ids = get_processed_mp_ids(conn)
+        logger.info("Resuming from checkpoint: %d MPs already processed", len(skip_mp_ids))
+    else:
+        conn = schema_module.create_database_with_tables(
+            output_path, schema_path, TABLE_NAMES,
+        )
 
-    interests = fetch_all_interests(mp_limit=mp_limit)
+    interests = fetch_all_interests(mp_limit=mp_limit, skip_mp_ids=skip_mp_ids)
     if interests:
         insert_interests(conn, interests, timestamp_millis)
 
@@ -440,6 +470,10 @@ def main():
         "--mp-limit", type=int, default=None,
         help="Limit number of MPs fetched (for testing).",
     )
+    parser.add_argument(
+        "--checkpoint-db",
+        help="Path to a checkpoint DB to resume from (seed mode only). Skips MPs already in the interests table.",
+    )
 
     args = parser.parse_args()
 
@@ -447,7 +481,7 @@ def main():
         parser.error("--previous-db is required for delta mode")
 
     if args.mode == "seed":
-        build_seed(args.output, args.schema, mp_limit=args.mp_limit)
+        build_seed(args.output, args.schema, mp_limit=args.mp_limit, checkpoint_db=args.checkpoint_db)
     elif args.mode == "delta":
         build_delta(args.output, args.previous_db, args.schema, mp_limit=args.mp_limit)
 

@@ -5,6 +5,7 @@ Uses mocked api_get to avoid hitting the real Parliament API.
 
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -408,6 +409,140 @@ class TestDeltaUpsert(unittest.TestCase):
         self.assertEqual(row[0], "Amended summary")
         self.assertEqual(row[1], 1000000)
 
+        c.close()
+
+
+class TestInterestsCheckpoint(unittest.TestCase):
+    """Test checkpoint/resume for interests seed mode."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.tmpdir, "interests.db")
+        self.checkpoint_db = os.path.join(self.tmpdir, "checkpoint.db")
+
+    def _make_checkpoint(self, mp_ids):
+        """Create a checkpoint DB with interests for the given MP IDs."""
+        conn = schema_module.create_database_with_tables(
+            self.checkpoint_db, SCHEMA_PATH, ["interests"],
+        )
+        ts = 1700000000000
+        for mp_id in mp_ids:
+            interest = make_interest_dto(mp_id * 100, mp_id, "1")
+            build_interests.insert_interests(conn, [interest], ts)
+        conn.close()
+
+    @patch("build_interests.api_get")
+    def test_checkpoint_skips_processed_mps(self, mock_api_get):
+        """Checkpoint DB has interests for MP 1; only MP 2 is fetched."""
+        self._make_checkpoint([1])
+
+        # API returns MPs 1 and 2; only MP 2 should be fetched
+        mp_page = {"items": [{"value": make_member_dto(1)}, {"value": make_member_dto(2)}]}
+        mp2_interests = {"items": [make_interest_dto(201, 2, "7")], "totalResults": 1}
+
+        mock_mp = MagicMock()
+        mock_mp.json.return_value = mp_page
+        mock_mp.raise_for_status = MagicMock()
+
+        mock_int = MagicMock()
+        mock_int.json.return_value = mp2_interests
+        mock_int.raise_for_status = MagicMock()
+
+        mock_api_get.side_effect = [mock_mp, mock_int]
+
+        build_interests.build_seed(
+            self.db_path, SCHEMA_PATH, mp_limit=2,
+            checkpoint_db=self.checkpoint_db,
+        )
+
+        # Only 2 api_get calls: 1 for MP list + 1 for MP 2's interests
+        # MP 1 was skipped (in checkpoint)
+        self.assertEqual(mock_api_get.call_count, 2)
+
+        c = sqlite3.connect(self.db_path)
+        # MP 1's interest from checkpoint + MP 2's new interest
+        count = c.execute("SELECT COUNT(*) FROM interests").fetchone()[0]
+        self.assertEqual(count, 2)
+        c.close()
+
+    @patch("build_interests.api_get")
+    def test_seed_with_nonexistent_checkpoint_starts_fresh(self, mock_api_get):
+        """Non-existent checkpoint path -> fresh seed."""
+        mp_page = {"items": [{"value": make_member_dto(1)}]}
+        interests_page = {"items": [make_interest_dto(101, 1, "1")], "totalResults": 1}
+
+        mock_mp = MagicMock()
+        mock_mp.json.return_value = mp_page
+        mock_mp.raise_for_status = MagicMock()
+
+        mock_int = MagicMock()
+        mock_int.json.return_value = interests_page
+        mock_int.raise_for_status = MagicMock()
+
+        mock_api_get.side_effect = [mock_mp, mock_int]
+
+        build_interests.build_seed(
+            self.db_path, SCHEMA_PATH, mp_limit=1,
+            checkpoint_db=os.path.join(self.tmpdir, "nonexistent.db"),
+        )
+
+        c = sqlite3.connect(self.db_path)
+        count = c.execute("SELECT COUNT(*) FROM interests").fetchone()[0]
+        self.assertEqual(count, 1)
+        c.close()
+
+    @patch("build_interests.api_get")
+    def test_seed_without_checkpoint_starts_fresh(self, mock_api_get):
+        """No checkpoint_db -> fresh seed (backward compatible)."""
+        mp_page = {"items": [{"value": make_member_dto(1)}]}
+        interests_page = {"items": [make_interest_dto(101, 1, "1")], "totalResults": 1}
+
+        mock_mp = MagicMock()
+        mock_mp.json.return_value = mp_page
+        mock_mp.raise_for_status = MagicMock()
+
+        mock_int = MagicMock()
+        mock_int.json.return_value = interests_page
+        mock_int.raise_for_status = MagicMock()
+
+        mock_api_get.side_effect = [mock_mp, mock_int]
+
+        build_interests.build_seed(self.db_path, SCHEMA_PATH, mp_limit=1)
+
+        c = sqlite3.connect(self.db_path)
+        count = c.execute("SELECT COUNT(*) FROM interests").fetchone()[0]
+        self.assertEqual(count, 1)
+        c.close()
+
+    @patch("build_interests.api_get")
+    def test_checkpoint_same_as_output(self, mock_api_get):
+        """--checkpoint-db and --output same path -> no truncation, resumes."""
+        self._make_checkpoint([1])
+        import shutil
+        shutil.copy2(self.checkpoint_db, self.db_path)
+
+        # API returns MPs 1 and 2; only MP 2 should be fetched
+        mp_page = {"items": [{"value": make_member_dto(1)}, {"value": make_member_dto(2)}]}
+        mp2_interests = {"items": [make_interest_dto(201, 2, "7")], "totalResults": 1}
+
+        mock_mp = MagicMock()
+        mock_mp.json.return_value = mp_page
+        mock_mp.raise_for_status = MagicMock()
+
+        mock_int = MagicMock()
+        mock_int.json.return_value = mp2_interests
+        mock_int.raise_for_status = MagicMock()
+
+        mock_api_get.side_effect = [mock_mp, mock_int]
+
+        build_interests.build_seed(
+            self.db_path, SCHEMA_PATH, mp_limit=2,
+            checkpoint_db=self.db_path,  # Same path
+        )
+
+        c = sqlite3.connect(self.db_path)
+        count = c.execute("SELECT COUNT(*) FROM interests").fetchone()[0]
+        self.assertEqual(count, 2)  # 1 from checkpoint + 1 new
         c.close()
 
 
