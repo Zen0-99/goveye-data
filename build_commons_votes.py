@@ -263,8 +263,10 @@ def build_delta(output_path, previous_db, schema_path, divisions_limit=None):
     """Delta mode: incremental fetch (D-03).
 
     1. Copy previous DB to output path
-    2. Fetch only new Commons divisions (DivisionId > max_commons_id)
-    3. VACUUM
+    2. Apply schema migrations (add missing columns)
+    3. Fetch only new Commons divisions (DivisionId > max_commons_id)
+    4. Backfill twfyDebateUrl for existing divisions that don't have it
+    5. VACUUM
 
     Past voting data is never re-fetched — the past is immutable (D-03).
     """
@@ -275,6 +277,13 @@ def build_delta(output_path, previous_db, schema_path, divisions_limit=None):
 
     conn = sqlite3.connect(output_path)
 
+    # --- Schema migration: add twfyDebateUrl column if missing ---
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(divisions)").fetchall()]
+    if "twfyDebateUrl" not in cols:
+        conn.execute("ALTER TABLE divisions ADD COLUMN twfyDebateUrl TEXT")
+        conn.commit()
+        logger.info("Schema migration: added twfyDebateUrl column to divisions")
+
     max_commons_id = get_max_division_id(conn, 1)
     logger.info("Delta mode: max_commons_id=%d", max_commons_id)
 
@@ -284,6 +293,28 @@ def build_delta(output_path, previous_db, schema_path, divisions_limit=None):
         time.sleep(API_DELAY)
     conn.commit()
     logger.info("Commons delta committed: %d new divisions", len(new_commons))
+
+    # --- Backfill twfyDebateUrl for existing divisions that don't have it ---
+    missing = conn.execute(
+        "SELECT id, date, number FROM divisions WHERE house = 1 AND twfyDebateUrl IS NULL"
+    ).fetchall()
+    if missing:
+        logger.info("Backfilling twfyDebateUrl for %d existing divisions...", len(missing))
+        backfilled = 0
+        for div_id, div_date, div_number in missing:
+            date_only = div_date.split("T")[0] if div_date else ""
+            twfy_url = fetch_twfy_debate_url(date_only, div_number, 1)
+            if twfy_url:
+                conn.execute(
+                    "UPDATE divisions SET twfyDebateUrl = ? WHERE id = ?",
+                    (twfy_url, div_id),
+                )
+                backfilled += 1
+            time.sleep(API_DELAY)
+        conn.commit()
+        logger.info("Backfilled twfyDebateUrl for %d/%d divisions", backfilled, len(missing))
+    else:
+        logger.info("All divisions already have twfyDebateUrl")
 
     logger.info("VACUUMing database to minimize file size...")
     conn.execute("VACUUM")
