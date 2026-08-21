@@ -1,0 +1,93 @@
+name: Update Party Stats
+
+on:
+  schedule:
+    - cron: '0 10 * * 1'  # Weekly, Monday 10am UTC (after mp-links)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download mps.db
+        run: |
+          gh release download mps-latest --pattern mps.db --output mps.db || echo "No mps.db found"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download previous DB and manifest
+        id: download_prev
+        run: |
+          gh release download party-stats-latest \
+            --pattern party_stats.db --output prev_party_stats.db || echo "No previous DB"
+          gh release download party-stats-latest \
+            --pattern manifest.json --output prev_manifest.json || echo "No previous manifest"
+          if [ -f prev_party_stats.db ]; then
+            echo "has_previous=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_previous=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Party Stats database (seed mode)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python build_party_stats.py --output party_stats.db --schema schemas/bundled_schema.json --mode seed --mps-db mps.db
+
+      - name: Build Party Stats database (delta mode)
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python build_party_stats.py --output party_stats.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_party_stats.db --mps-db mps.db
+
+      - name: Generate diff patch
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python diff_db.py --new party_stats.db --previous prev_party_stats.db --schema schemas/bundled_schema.json --output patch.json --tables party_stats
+
+      - name: Generate diff patch (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python diff_db.py --new party_stats.db --schema schemas/bundled_schema.json --output patch.json --tables party_stats
+
+      - name: Generate manifest
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python manifest.py --db party_stats.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json --previous-manifest prev_manifest.json
+
+      - name: Generate manifest (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python manifest.py --db party_stats.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: party-stats-latest
+          name: Party Stats Latest
+          body: |
+            Party stats update for GovEye (weekly).
+
+            - **party_stats.db**: Per-API SQLite database (party_stats table)
+            - **patch.json**: Incremental diff patch
+            - **manifest.json**: Version, SHA-256 hashes, and file sizes
+          files: |
+            party_stats.db
+            patch.json
+            manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

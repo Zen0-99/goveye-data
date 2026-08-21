@@ -125,6 +125,12 @@ API_TABLE_NAMES = {
     "recess": ["recess_dates", "recess_dates_meta"],
     "interests": ["interests"],
     "debates": ["debate_speeches"],
+    "bio_data": ["bio_data"],
+    "expenses": ["expenses"],
+    "mp_links": ["mp_links"],
+    "party_manifestos": ["party_manifestos", "party_manifestos_fts4"],
+    "party_stats": ["party_stats"],
+    "historical_members": ["historical_members", "historical_members_fts4"],
 }
 
 

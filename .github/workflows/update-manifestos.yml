@@ -1,0 +1,105 @@
+name: Update Manifestos
+
+on:
+  schedule:
+    - cron: '0 1 1 * *'  # Monthly, 1st of month at 01:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download previous DB and manifest
+        id: download_prev
+        run: |
+          gh release download manifestos-latest \
+            --pattern manifestos.db --output prev_manifestos.db || echo "No previous DB (first run)"
+          gh release download manifestos-latest \
+            --pattern manifest.json --output prev_manifest.json || echo "No previous manifest (first run)"
+          if [ -f prev_manifestos.db ]; then
+            echo "has_previous=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_previous=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Manifestos database (seed mode)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python build_manifestos.py --output manifestos.db --schema schemas/bundled_schema.json --mode seed
+
+      - name: Build Manifestos database (delta mode)
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python build_manifestos.py --output manifestos.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_manifestos.db
+
+      - name: Generate diff patch
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python diff_db.py --new manifestos.db --previous prev_manifestos.db --schema schemas/bundled_schema.json --output patch.json --tables party_manifestos
+
+      - name: Generate diff patch (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python diff_db.py --new manifestos.db --schema schemas/bundled_schema.json --output patch.json --tables party_manifestos
+
+      - name: Generate manifest
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python manifest.py --db manifestos.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json --previous-manifest prev_manifest.json
+
+      - name: Generate manifest (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python manifest.py --db manifestos.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json
+
+      - name: Check if manifestos changed
+        id: check_changes
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          if [ -f prev_manifest.json ] && [ -f manifest.json ]; then
+            OLD_HASH=$(python -c "import json; d=json.load(open('prev_manifest.json')); print(d.get('files',{}).get('manifestos.db',{}).get('sha256',''))" 2>/dev/null || echo "")
+            NEW_HASH=$(python -c "import json; d=json.load(open('manifest.json')); print(d.get('files',{}).get('manifestos.db',{}).get('sha256',''))" 2>/dev/null || echo "")
+            if [ "$OLD_HASH" == "$NEW_HASH" ] && [ -n "$OLD_HASH" ]; then
+              echo "changed=false" >> $GITHUB_OUTPUT
+              echo "Manifestos unchanged, skipping publish"
+            else
+              echo "changed=true" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish to GitHub Releases
+        if: steps.check_changes.outputs.changed != 'false'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: manifestos-latest
+          name: Manifestos Latest
+          body: |
+            Party manifestos update for GovEye (monthly check).
+
+            - **manifestos.db**: Per-API SQLite database (party_manifestos + FTS4)
+            - **patch.json**: Incremental diff patch (party_manifestos)
+            - **manifest.json**: Version, SHA-256 hashes, and file sizes
+          files: |
+            manifestos.db
+            patch.json
+            manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

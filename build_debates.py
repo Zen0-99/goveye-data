@@ -104,6 +104,33 @@ def build_name_lookup(mps_db_path):
     return lookup
 
 
+def build_twfy_id_lookup(historical_members_db_path):
+    """Build a twfy_person_id → parliament_member_id lookup from the historical_members DB.
+
+    This is the primary matching mechanism — the debate scraper extracts
+    twfy_person_id from TWFY HTML, and this lookup maps it directly to the
+    Parliament member ID without name matching.
+
+    Returns an empty dict if the DB is not found (falls back to name matching).
+    """
+    if not os.path.exists(historical_members_db_path):
+        logger.warning("Historical members DB not found: %s — falling back to name matching only",
+                       historical_members_db_path)
+        return {}
+
+    conn = sqlite3.connect(historical_members_db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT twfyPersonId, parliamentMemberId FROM historical_members WHERE parliamentMemberId IS NOT NULL")
+    lookup = {}
+    for row in cursor.fetchall():
+        twfy_id, parl_id = row
+        lookup[twfy_id] = parl_id
+    conn.close()
+
+    logger.info("Built TWFY ID lookup: %d mappings", len(lookup))
+    return lookup
+
+
 def match_speaker(name, lookup):
     """Match a speaker name to a Parliament member ID.
 
@@ -117,7 +144,7 @@ def match_speaker(name, lookup):
 
 # --- Debate page parsing ---
 
-def parse_debate_page(html, debate_gid, division_id, name_lookup, timestamp_millis):
+def parse_debate_page(html, debate_gid, division_id, name_lookup, timestamp_millis, twfy_id_lookup=None):
     """Parse a TWFY debate page and return a list of debate_speeches rows.
 
     Each row is a tuple matching the debate_speeches table schema:
@@ -172,7 +199,15 @@ def parse_debate_page(html, debate_gid, division_id, name_lookup, timestamp_mill
         is_intervention = 1 if parent_div else 0
 
         # Match speaker to Parliament member ID
-        member_id = match_speaker(name, name_lookup)
+        # Primary: TWFY person ID → Parliament member ID (direct lookup)
+        # Fallback: name matching against current MPs
+        if twfy_id_lookup and twfy_person_id > 0:
+            member_id = twfy_id_lookup.get(twfy_person_id, 0)
+            if member_id == 0:
+                # TWFY ID not in historical members — try name matching
+                member_id = match_speaker(name, name_lookup)
+        else:
+            member_id = match_speaker(name, name_lookup)
 
         rows.append((
             debate_gid,
@@ -245,12 +280,15 @@ def extract_debate_gid(twfy_url):
 # --- Build modes ---
 
 def build_seed(output_path, schema_path, commons_db, lords_db, mps_db,
-               divisions_limit=None, checkpoint_db=None):
+               divisions_limit=None, checkpoint_db=None, historical_members_db=None):
     """Seed mode: fetch all debate pages and build a fresh debates.db."""
     timestamp_millis = int(time.time() * 1000)
 
     # Build name lookup for MP matching
     name_lookup = build_name_lookup(mps_db)
+
+    # Build TWFY ID lookup for direct speaker matching
+    twfy_id_lookup = build_twfy_id_lookup(historical_members_db) if historical_members_db else {}
 
     # Collect all debate URLs from both votes DBs
     commons_urls = get_debate_urls_from_votes_db(commons_db, 1)
@@ -320,7 +358,7 @@ def build_seed(output_path, schema_path, commons_db, lords_db, mps_db,
         # Parse and insert speeches for each division sharing this debate
         for division_id, _ in divisions_for_debate:
             rows = parse_debate_page(
-                r.text, gid, division_id, name_lookup, timestamp_millis,
+                r.text, gid, division_id, name_lookup, timestamp_millis, twfy_id_lookup,
             )
             if rows:
                 for i in range(0, len(rows), BATCH_SIZE):
@@ -354,7 +392,7 @@ def build_seed(output_path, schema_path, commons_db, lords_db, mps_db,
 
 
 def build_delta(output_path, previous_db, schema_path, commons_db, lords_db, mps_db,
-                divisions_limit=None):
+                divisions_limit=None, historical_members_db=None):
     """Delta mode: fetch only NEW debate pages not in the previous DB."""
     timestamp_millis = int(time.time() * 1000)
 
@@ -369,6 +407,9 @@ def build_delta(output_path, previous_db, schema_path, commons_db, lords_db, mps
 
     # Build name lookup
     name_lookup = build_name_lookup(mps_db)
+
+    # Build TWFY ID lookup for direct speaker matching
+    twfy_id_lookup = build_twfy_id_lookup(historical_members_db) if historical_members_db else {}
 
     # Collect all debate URLs
     commons_urls = get_debate_urls_from_votes_db(commons_db, 1)
@@ -410,7 +451,7 @@ def build_delta(output_path, previous_db, schema_path, commons_db, lords_db, mps
 
         for division_id, _ in divisions_for_debate:
             rows = parse_debate_page(
-                r.text, gid, division_id, name_lookup, timestamp_millis,
+                r.text, gid, division_id, name_lookup, timestamp_millis, twfy_id_lookup,
             )
             if rows:
                 for i in range(0, len(rows), BATCH_SIZE):
@@ -481,6 +522,10 @@ def main():
         "--checkpoint-db",
         help="Path to a checkpoint DB to resume from (seed mode only).",
     )
+    parser.add_argument(
+        "--historical-members-db",
+        help="Path to historical_members.db (for TWFY person ID → Parliament member ID matching).",
+    )
     args = parser.parse_args()
 
     if args.mode == "delta" and not args.previous_db:
@@ -494,6 +539,7 @@ def main():
             mps_db=args.mps_db,
             divisions_limit=args.divisions_limit,
             checkpoint_db=args.checkpoint_db,
+            historical_members_db=args.historical_members_db,
         )
     else:
         build_delta(
@@ -502,6 +548,7 @@ def main():
             lords_db=args.lords_db,
             mps_db=args.mps_db,
             divisions_limit=args.divisions_limit,
+            historical_members_db=args.historical_members_db,
         )
 
 

@@ -29,15 +29,17 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Download dependency DBs (commons-votes, lords-votes, mps)
+      - name: Download dependency DBs (commons-votes, lords-votes, mps, historical-members)
         run: |
-          # Download the latest commons-votes.db, lords-votes.db, and mps.db
+          # Download the latest commons-votes.db, lords-votes.db, mps.db, and historical_members.db
           # from their respective releases. These are needed to:
           # - commons-votes.db / lords-votes.db: read twfyDebateUrl column
           # - mps.db: name matching (speaker name -> Parliament member ID)
+          # - historical_members.db: TWFY person ID -> Parliament member ID matching
           gh release download commons-votes-latest --pattern commons_votes.db --output commons_votes.db || echo "No commons-votes DB yet"
           gh release download lords-votes-latest --pattern lords_votes.db --output lords_votes.db || echo "No lords-votes DB yet"
           gh release download mps-latest --pattern mps.db --output mps.db || echo "No mps DB yet"
+          gh release download historical-members-latest --pattern historical_members.db --output historical_members.db || echo "No historical-members DB yet"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -95,6 +97,7 @@ jobs:
             --commons-db commons_votes.db \
             --lords-db lords_votes.db \
             --mps-db mps.db \
+            --historical-members-db historical_members.db \
             --checkpoint-db debates.db
 
       - name: Build Debates database (delta mode)
@@ -107,7 +110,8 @@ jobs:
             --previous-db prev_debates.db \
             --commons-db commons_votes.db \
             --lords-db lords_votes.db \
-            --mps-db mps.db
+            --mps-db mps.db \
+            --historical-members-db historical_members.db
 
       - name: Save seed checkpoint
         if: steps.download_prev.outputs.has_previous != 'true' && always()

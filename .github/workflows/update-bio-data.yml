@@ -1,0 +1,112 @@
+name: Update Bio Data
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'  # Weekly, Monday 7am UTC (after MPS update)
+  workflow_dispatch:      # Manual trigger for seed builds and testing
+
+permissions:
+  contents: write  # Required by softprops/action-gh-release@v3
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60  # MNIS fetch is 650 MPs in batches of 50 = 13 API calls
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download mps.db (needed for MP IDs)
+        run: |
+          gh release download mps-latest --pattern mps.db --output mps.db || echo "No mps.db found"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore seed checkpoint
+        id: restore_checkpoint
+        if: steps.download_prev.outputs.has_previous != 'true'
+        uses: actions/cache@v4
+        with:
+          path: bio_data.db
+          key: bio-data-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
+          restore-keys: |
+            bio-data-seed-${{ hashFiles('schemas/bundled_schema.json') }}-
+
+      - name: Download previous DB and manifest
+        id: download_prev
+        run: |
+          gh release download bio-data-latest \
+            --pattern bio_data.db --output prev_bio_data.db || echo "No previous DB (first run)"
+          gh release download bio-data-latest \
+            --pattern manifest.json --output prev_manifest.json || echo "No previous manifest (first run)"
+          if [ -f prev_bio_data.db ]; then
+            echo "has_previous=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_previous=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Bio Data database (seed mode)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python build_mnis.py --output bio_data.db --schema schemas/bundled_schema.json --mode seed --mps-db mps.db --checkpoint-db bio_data.db
+
+      - name: Build Bio Data database (delta mode)
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python build_mnis.py --output bio_data.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_bio_data.db --mps-db mps.db
+
+      - name: Save seed checkpoint
+        if: steps.download_prev.outputs.has_previous != 'true' && always()
+        uses: actions/cache@v4
+        with:
+          path: bio_data.db
+          key: bio-data-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
+
+      - name: Generate diff patch
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python diff_db.py --new bio_data.db --previous prev_bio_data.db --schema schemas/bundled_schema.json --output patch.json --tables bio_data
+
+      - name: Generate diff patch (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python diff_db.py --new bio_data.db --schema schemas/bundled_schema.json --output patch.json --tables bio_data
+
+      - name: Generate manifest
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python manifest.py --db bio_data.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json --previous-manifest prev_manifest.json
+
+      - name: Generate manifest (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python manifest.py --db bio_data.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: bio-data-latest
+          name: Bio Data Latest
+          body: |
+            MNIS biographical data update for GovEye (weekly).
+
+            - **bio_data.db**: Per-API SQLite database (bio_data table only)
+            - **patch.json**: Incremental diff patch (bio_data)
+            - **manifest.json**: Version, SHA-256 hashes, and file sizes
+
+            See manifest.json for the current version number and file hashes.
+          files: |
+            bio_data.db
+            patch.json
+            manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

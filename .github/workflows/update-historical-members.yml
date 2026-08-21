@@ -1,0 +1,87 @@
+name: Update Historical Members
+
+on:
+  schedule:
+    - cron: '0 10 * * 1'  # Weekly, Monday 10am UTC (after mp-links)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download previous DB and manifest
+        id: download_prev
+        run: |
+          gh release download historical-members-latest \
+            --pattern historical_members.db --output prev_historical_members.db || echo "No previous DB"
+          gh release download historical-members-latest \
+            --pattern manifest.json --output prev_manifest.json || echo "No previous manifest"
+          if [ -f prev_historical_members.db ]; then
+            echo "has_previous=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_previous=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Historical Members database (seed mode)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python build_historical_members.py --output historical_members.db --schema schemas/bundled_schema.json --mode seed
+
+      - name: Build Historical Members database (delta mode)
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python build_historical_members.py --output historical_members.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_historical_members.db
+
+      - name: Generate diff patch
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python diff_db.py --new historical_members.db --previous prev_historical_members.db --schema schemas/bundled_schema.json --output patch.json --tables historical_members
+
+      - name: Generate diff patch (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python diff_db.py --new historical_members.db --schema schemas/bundled_schema.json --output patch.json --tables historical_members
+
+      - name: Generate manifest
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python manifest.py --db historical_members.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json --previous-manifest prev_manifest.json
+
+      - name: Generate manifest (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python manifest.py --db historical_members.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: historical-members-latest
+          name: Historical Members Latest
+          body: |
+            Historical members update for GovEye (weekly).
+
+            - **historical_members.db**: Per-API SQLite database (historical_members + FTS4 tables)
+            - **patch.json**: Incremental diff patch
+            - **manifest.json**: Version, SHA-256 hashes, and file sizes
+          files: |
+            historical_members.db
+            patch.json
+            manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
