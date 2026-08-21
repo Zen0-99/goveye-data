@@ -294,6 +294,12 @@ def build_historical_members_table(conn):
         CREATE VIRTUAL TABLE IF NOT EXISTS historical_members_fts4
         USING fts4(displayName, alternateNames, content=`historical_members`)
     """)
+    # Migrate: add photo column if missing (delta mode copies old schema)
+    cursor.execute("PRAGMA table_info(historical_members)")
+    columns = {row[1] for row in cursor.fetchall()}
+    if "photo" not in columns:
+        cursor.execute("ALTER TABLE historical_members ADD COLUMN photo BLOB")
+        logger.info("Migrated historical_members: added photo column")
     conn.commit()
 
 
