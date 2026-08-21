@@ -39,6 +39,23 @@ PARLPARSE_PEOPLE_URL = "https://raw.githubusercontent.com/mysociety/parlparse/ma
 TABLE_NAMES = ["historical_members", "historical_members_fts4"]
 START_YEAR = "2000"
 
+# Prime Ministers 2000-2026: twfyPersonId → parliamentMemberId for photo download.
+# Tony Blair's parliamentMemberId (313) is not in ParlParse, so hardcoded here.
+# The others are in ParlParse but we list them all for clarity.
+PM_PHOTOS = {
+    10047: 313,    # Tony Blair
+    10068: 591,    # Gordon Brown
+    10777: 1467,   # David Cameron
+    10426: 8,      # Theresa May
+    10999: 1423,   # Boris Johnson
+    24941: 4097,   # Liz Truss (Elizabeth Truss)
+    25428: 4483,   # Rishi Sunak
+    25353: 4514,   # Keir Starmer
+    10766: 1427,   # Andy Burnham (PM since July 2026)
+}
+
+PARLIAMENT_PHOTO_URL = "https://members-api.parliament.uk/api/Members/{}/Thumbnail"
+
 
 # --- JSON parsing ---
 
@@ -228,6 +245,30 @@ def parse_people_json(data):
     return rows
 
 
+def download_pm_photos():
+    """Download photos for Prime Ministers 2000-2026 from the Parliament API.
+
+    Returns a dict mapping twfyPersonId → photo BLOB (bytes).
+    """
+    photos = {}
+    for twfy_id, parl_id in PM_PHOTOS.items():
+        url = PARLIAMENT_PHOTO_URL.format(parl_id)
+        try:
+            r = api_get(url, timeout=30, max_retries=2)
+            if r.status_code == 200 and r.content:
+                photos[twfy_id] = r.content
+                logger.info("Downloaded PM photo: twfyPersonId=%d, parlId=%d, %d bytes",
+                            twfy_id, parl_id, len(r.content))
+            else:
+                logger.warning("PM photo failed: twfyPersonId=%d, parlId=%d, status=%d",
+                               twfy_id, parl_id, r.status_code)
+        except Exception as e:
+            logger.warning("PM photo error: twfyPersonId=%d, parlId=%d, %s",
+                           twfy_id, parl_id, e)
+    logger.info("Downloaded %d/%d PM photos", len(photos), len(PM_PHOTOS))
+    return photos
+
+
 # --- DB operations ---
 
 def build_historical_members_table(conn):
@@ -245,6 +286,7 @@ def build_historical_members_table(conn):
             endDate TEXT,
             constituency TEXT,
             isCurrent INTEGER NOT NULL DEFAULT 0,
+            photo BLOB,
             lastUpdated INTEGER
         )
     """)
@@ -255,15 +297,23 @@ def build_historical_members_table(conn):
     conn.commit()
 
 
-def insert_historical_members(conn, rows, timestamp_millis):
-    """Batch insert historical_members rows using INSERT OR REPLACE."""
+def insert_historical_members(conn, rows, timestamp_millis, pm_photos=None):
+    """Batch insert historical_members rows using INSERT OR REPLACE.
+
+    Also updates PM photos and Tony Blair's parliamentMemberId if pm_photos is provided.
+    """
     cursor = conn.cursor()
     insert_sql = """
         INSERT OR REPLACE INTO historical_members (
             twfyPersonId, parliamentMemberId, displayName, alternateNames,
-            party, house, startDate, endDate, constituency, isCurrent, lastUpdated
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            party, house, startDate, endDate, constituency, isCurrent, photo, lastUpdated
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
+
+    # Fix Tony Blair's parliamentMemberId (not in ParlParse, hardcoded in PM_PHOTOS)
+    for row in rows:
+        if row["twfyPersonId"] in PM_PHOTOS:
+            row["parliamentMemberId"] = PM_PHOTOS[row["twfyPersonId"]]
 
     tuples = [
         (
@@ -277,6 +327,7 @@ def insert_historical_members(conn, rows, timestamp_millis):
             row.get("endDate"),
             row.get("constituency"),
             row["isCurrent"],
+            pm_photos.get(row["twfyPersonId"]) if pm_photos else None,
             timestamp_millis,
         )
         for row in rows
@@ -315,8 +366,9 @@ def build_seed(output_path, schema_path, checkpoint_db=None):
     data = download_people_json()
     rows = parse_people_json(data)
 
+    pm_photos = download_pm_photos()
     if rows:
-        insert_historical_members(conn, rows, timestamp_millis)
+        insert_historical_members(conn, rows, timestamp_millis, pm_photos)
 
     logger.info("VACUUMing database to minimize file size...")
     conn.execute("VACUUM")
@@ -337,8 +389,9 @@ def build_delta(output_path, previous_db, schema_path):
     data = download_people_json()
     rows = parse_people_json(data)
 
+    pm_photos = download_pm_photos()
     if rows:
-        insert_historical_members(conn, rows, timestamp_millis)
+        insert_historical_members(conn, rows, timestamp_millis, pm_photos)
 
     logger.info("VACUUMing database to minimize file size...")
     conn.execute("VACUUM")
