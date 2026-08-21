@@ -21,7 +21,7 @@ import sqlite3
 import time
 
 import schema as schema_module
-from api_helper import api_get, API_DELAY, BATCH_SIZE, logger
+from api_helper import api_get, fetch_twfy_debate_url, API_DELAY, BATCH_SIZE, logger
 
 # --- Constants ---
 
@@ -84,7 +84,7 @@ def fetch_commons_division_detail(division_id):
     return r.json()
 
 
-def map_commons_division_to_entity(div, timestamp_millis):
+def map_commons_division_to_entity(div, timestamp_millis, twfy_debate_url=None):
     """Map a Commons DivisionDto to a divisions table row tuple (house=1)."""
     return (
         div.get("DivisionId", 0),
@@ -97,6 +97,7 @@ def map_commons_division_to_entity(div, timestamp_millis):
         div.get("NoCount", 0),
         1,  # house=1 for Commons
         timestamp_millis,
+        twfy_debate_url,
     )
 
 
@@ -120,12 +121,16 @@ def insert_commons_division(conn, div, timestamp_millis):
     cursor = conn.cursor()
     division_id = div.get("DivisionId", 0)
 
+    # Fetch the TWFY debate URL (scrape the TWFY division page for the GID)
+    date_only = (div.get("Date") or "").split("T")[0]
+    twfy_url = fetch_twfy_debate_url(date_only, div.get("Number"), 1)
+
     cursor.execute(
         """INSERT OR REPLACE INTO divisions
            (id, title, date, publicationUpdated, number, isDeferred,
-            ayeCount, noCount, house, lastUpdated)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        map_commons_division_to_entity(div, timestamp_millis),
+            ayeCount, noCount, house, lastUpdated, twfyDebateUrl)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        map_commons_division_to_entity(div, timestamp_millis, twfy_url),
     )
 
     detail = fetch_commons_division_detail(division_id)

@@ -124,6 +124,7 @@ API_TABLE_NAMES = {
     "committees": ["committees", "mp_committee_cross_ref"],
     "recess": ["recess_dates", "recess_dates_meta"],
     "interests": ["interests"],
+    "debates": ["debate_speeches"],
 }
 
 

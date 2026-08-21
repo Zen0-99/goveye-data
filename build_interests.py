@@ -82,6 +82,14 @@ POUND_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Plain number with optional thousands separators and "pounds" suffix
+# Matches: "18,000", "18000 pounds", "5,000 GBP", "£5,000" (already handled above)
+PLAIN_AMOUNT_PATTERN = re.compile(
+    r'(?<![\w£])(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*'
+    r'(pounds?|gbp|£)?',
+    re.IGNORECASE,
+)
+
 # Range: £X to £Y, £X–£Y, £X-£Y -> take the higher value
 RANGE_PATTERN = re.compile(
     r'£\s?(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(?:to|[-–])\s*'
@@ -127,15 +135,32 @@ def _regex_extract(text):
         return (int(round(amount * 100)), "GBP")
 
     # Check for negative (only for single amounts, not ranges)
-    is_negative = bool(re.search(r'(?:^|\s)-\s*£', text))
+    # Must be "-£" directly (no space between - and £) to distinguish
+    # from " - £" which is a dash separator in summaries like
+    # "Payment received on 12 March 2025 - £18,450.00"
+    is_negative = bool(re.search(r'(?:^|\s)-£', text))
 
-    # Try single amount pattern
+    # Try single amount pattern with £ symbol
     pound_match = POUND_PATTERN.search(text)
     if pound_match:
         amount_str = pound_match.group(1).replace(",", "")
         amount = float(amount_str)
         suffix = pound_match.group(2)
         amount = _apply_multiplier(amount, suffix)
+        if is_negative:
+            amount = -amount
+        return (int(round(amount * 100)), "GBP")
+
+    # Fallback: plain number with "pounds" or "GBP" suffix
+    # Only match if there's a currency indicator to avoid false positives
+    # (e.g. "18000 pounds" or "5,000 GBP")
+    plain_match = re.search(
+        r'(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(?:pounds?|gbp)\b',
+        text, re.IGNORECASE,
+    )
+    if plain_match:
+        amount_str = plain_match.group(1).replace(",", "")
+        amount = float(amount_str)
         if is_negative:
             amount = -amount
         return (int(round(amount * 100)), "GBP")
@@ -186,7 +211,15 @@ def parse_amount(fields_json):
                 pence = int(round(float(value) * 100))
                 return (pence, currency_code)
             elif isinstance(value, str):
-                # Value is a string — try regex on it
+                # Value is a string. The Parliament API returns decimal
+                # amounts as strings like "18450.00" with a currencyCode
+                # typeInfo. Try parsing as a plain number first, then regex.
+                try:
+                    pence = int(round(float(value) * 100))
+                    return (pence, currency_code)
+                except ValueError:
+                    pass
+                # Not a plain number — try regex (handles "£5,000", ranges, etc.)
                 pence, _ = _regex_extract(value)
                 if pence is not None:
                     return (pence, currency_code)
@@ -349,6 +382,14 @@ def map_interest_to_entity(interest_dto, timestamp_millis):
     fields = interest_dto.get("fields") or []
     fields_json = json.dumps(fields)
     parsed_pence, currency_code = parse_amount(fields_json)
+
+    # Fallback: try parsing the summary field if fields didn't yield an amount.
+    # The Parliament API sometimes puts the amount only in the summary text
+    # (e.g. "Payment of £18,000 received on 12 March 2025").
+    if parsed_pence is None:
+        summary = interest_dto.get("summary") or ""
+        parsed_pence, currency_code = _regex_extract(summary)
+
     bucket = get_bucket(category_number)
 
     member = interest_dto.get("member") or {}

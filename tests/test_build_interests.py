@@ -119,6 +119,28 @@ class TestParseAmount(unittest.TestCase):
         }])
         self.assertEqual(build_interests.parse_amount(fields), (100000, "USD"))
 
+    def test_parse_structured_string_value(self):
+        """Structured field with currencyCode='GBP' and value='18450.00' (string)
+        returns (1845000, 'GBP'). The Parliament API returns decimals as strings."""
+        fields = json.dumps([{
+            "name": "Value",
+            "value": "18450.00",
+            "typeInfo": {"currencyCode": "GBP"},
+        }])
+        self.assertEqual(build_interests.parse_amount(fields), (1845000, "GBP"))
+
+    def test_parse_summary_fallback(self):
+        """When fields have no amount, the summary text 'Payment received - £18,450.00'
+        is parsed as a fallback."""
+        fields = json.dumps([{"name": "PaymentReceived", "value": True}])
+        summary = "Payment received on 12 March 2025 - £18,450.00"
+        pence, currency = build_interests.parse_amount(fields)
+        # parse_amount only checks fields; the summary fallback is in
+        # map_interest_to_entity. Test _regex_extract directly.
+        pence, currency = build_interests._regex_extract(summary)
+        self.assertEqual(pence, 1845000)
+        self.assertEqual(currency, "GBP")
+
     def test_parse_never_fabricates(self):
         """Field with 'See attached document' returns (None, None)."""
         fields = json.dumps([{"name": "Note", "value": "See attached document"}])

@@ -24,7 +24,7 @@ import sqlite3
 import time
 
 import schema as schema_module
-from api_helper import api_get, API_DELAY, BATCH_SIZE, logger
+from api_helper import api_get, fetch_twfy_debate_url, API_DELAY, BATCH_SIZE, logger
 
 # --- Constants ---
 
@@ -87,7 +87,7 @@ def fetch_lords_division_detail(division_id):
     return r.json()
 
 
-def map_lords_division_to_entity(div, timestamp_millis):
+def map_lords_division_to_entity(div, timestamp_millis, twfy_debate_url=None):
     """Map a Lords division to a divisions table row tuple (house=2).
 
     Lords API uses camelCase field names. Content → AYE, Not Content → NO.
@@ -103,6 +103,7 @@ def map_lords_division_to_entity(div, timestamp_millis):
         div.get("memberNotContentCount", 0),
         2,  # house=2 for Lords (D-07)
         timestamp_millis,
+        twfy_debate_url,
     )
 
 
@@ -131,12 +132,16 @@ def insert_lords_division(conn, div, timestamp_millis):
     cursor = conn.cursor()
     division_id = div.get("divisionId", 0)
 
+    # Fetch the TWFY debate URL (scrape the TWFY division page for the GID)
+    date_only = (div.get("date") or "").split("T")[0]
+    twfy_url = fetch_twfy_debate_url(date_only, div.get("number"), 2)
+
     cursor.execute(
         """INSERT OR REPLACE INTO divisions
            (id, title, date, publicationUpdated, number, isDeferred,
-            ayeCount, noCount, house, lastUpdated)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        map_lords_division_to_entity(div, timestamp_millis),
+            ayeCount, noCount, house, lastUpdated, twfyDebateUrl)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        map_lords_division_to_entity(div, timestamp_millis, twfy_url),
     )
 
     detail = fetch_lords_division_detail(division_id)

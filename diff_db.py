@@ -42,6 +42,7 @@ TABLE_PRIMARY_KEYS = {
     "recess_dates": ["id"],
     "recess_dates_meta": ["id"],
     "mp_notification_prefs": ["mpId"],
+    "debate_speeches": ["debateGid", "speechGid"],
 }
 
 # Tables to skip in diffing (FTS virtual tables don't need diffing)
