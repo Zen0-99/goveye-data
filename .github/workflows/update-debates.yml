@@ -1,9 +1,15 @@
 name: Update Debates
 
 on:
-  schedule:
-    - cron: '30 6,18 * * *'  # Twice daily at 06:30 and 18:30 UTC (after votes workflows)
-  workflow_dispatch:      # Manual trigger for seed builds and testing
+  workflow_dispatch:      # Manual trigger, or triggered by votes workflows
+  # No schedule — debates is triggered by update-commons-votes and update-lords-votes
+  # after they complete. This guarantees the votes DBs have fresh twfyDebateUrl data.
+
+# Concurrency: if both votes workflows trigger debates at nearly the same time,
+# cancel the first run and let the second one proceed (it will see both DBs updated).
+concurrency:
+  group: debates-update
+  cancel-in-progress: true
 
 permissions:
   contents: write  # Required by softprops/action-gh-release@v3
@@ -34,6 +40,25 @@ jobs:
           gh release download mps-latest --pattern mps.db --output mps.db || echo "No mps DB yet"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify votes DBs have twfyDebateUrl
+        id: verify
+        run: |
+          python -c "
+          import sqlite3, sys
+          for db, name in [('commons_votes.db', 'Commons'), ('lords_votes.db', 'Lords')]:
+              try:
+                  conn = sqlite3.connect(db)
+                  cols = [r[1] for r in conn.execute('PRAGMA table_info(divisions)').fetchall()]
+                  if 'twfyDebateUrl' not in cols:
+                      print(f'::warning::{name} votes DB missing twfyDebateUrl column — debates will find 0 debates from {name}')
+                  else:
+                      count = conn.execute('SELECT COUNT(*) FROM divisions WHERE twfyDebateUrl IS NOT NULL').fetchone()[0]
+                      print(f'{name}: {count} divisions with twfyDebateUrl')
+                  conn.close()
+              except Exception as e:
+                  print(f'::warning::Could not check {name} votes DB: {e}')
+          "
 
       - name: Download previous debates DB and manifest
         id: download_prev
