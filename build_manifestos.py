@@ -36,20 +36,20 @@ TABLE_NAMES = ["party_manifestos", "party_manifestos_fts4"]
 # In production, these would be downloaded from Lancaster Wmatrix or party websites.
 # For the build script, we support both URL download and local file bundling.
 PARTY_MANIFESTOS = {
-    4:    {"abbrev": "Con", "name": "Conservative", "filename": "conservative_2024.txt"},
-    15:   {"abbrev": "Lab", "name": "Labour", "filename": "labour_2024.txt"},
-    17:   {"abbrev": "LD", "name": "Liberal Democrat", "filename": "libdem_2024.txt"},
-    44:   {"abbrev": "Green", "name": "Green", "filename": "green_2024.txt"},
-    22:   {"abbrev": "PC", "name": "Plaid Cymru", "filename": "plaidcymru_2024.txt"},
-    29:   {"abbrev": "SNP", "name": "SNP", "filename": "snp_2024.txt"},
-    1036: {"abbrev": "RUK", "name": "Reform UK", "filename": "reformuk_2024.txt"},
+    4:    {"abbrev": "Con", "name": "Conservative", "filename": "Conservatives.txt"},
+    15:   {"abbrev": "Lab", "name": "Labour", "filename": "Labour.txt"},
+    17:   {"abbrev": "LD", "name": "Liberal Democrat", "filename": "LiberalDemocrats.txt"},
+    44:   {"abbrev": "Green", "name": "Green", "filename": "Green.txt"},
+    22:   {"abbrev": "PC", "name": "Plaid Cymru", "filename": "PlaidCymru.txt"},
+    29:   {"abbrev": "SNP", "name": "SNP", "filename": "SNP.txt"},
+    1036: {"abbrev": "RUK", "name": "Reform UK", "filename": "ReformUK.txt"},
 }
 
 MANIFESTO_YEAR = 2024
 
-# Base URL for manifesto text files (if hosted on a CDN or GitHub)
-# In production, this would be Lancaster Wmatrix or a bundled source
-MANIFESTO_BASE_URL = "https://raw.githubusercontent.com/goveye/manifesto-text/main/2024/"
+# Lancaster Wmatrix hosts edited plain-text versions of UK election manifestos.
+# These are manually edited from PDFs (headers/footers removed, pseudo-XML tags).
+MANIFESTO_BASE_URL = "https://ucrel.lancs.ac.uk/wmatrix/ukmanifestos2024/text/"
 
 
 def compute_word_count(text):

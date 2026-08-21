@@ -31,32 +31,34 @@ MAJOR_PARTIES = {
     22:   {"name": "Plaid Cymru", "wiki": "Plaid_Cymru"},
     29:   {"name": "SNP", "wiki": "Scottish_National_Party"},
     1036: {"name": "Reform UK", "wiki": "Reform_UK"},
-    51:   {"name": "DUP", "wiki": "Democratic_Unionist_Party"},
-    39:   {"name": "Sinn Fein", "wiki": "Sinn_Fein"},
-    48:   {"name": "SDLP", "wiki": "Social_Democratic_and_Labour_Party"},
-    40:   {"name": "Alliance Party", "wiki": "Alliance_Party_of_Northern_Ireland"},
-    31:   {"name": "UUP", "wiki": "Ulster_Unionist_Party"},
-    1026: {"name": "Workers Party", "wiki": "Workers_Party_of_Ireland"},
-    7:    {"name": "Independent", "wiki": None},
-    8:    {"name": "Speaker", "wiki": "Speaker_of_the_House_of_Commons_(UK)"},
+    7:    {"name": "DUP", "wiki": "Democratic_Unionist_Party"},
+    30:   {"name": "Sinn Fein", "wiki": "Sinn_Fein"},
+    31:   {"name": "SDLP", "wiki": "Social_Democratic_and_Labour_Party"},
+    1:    {"name": "Alliance Party", "wiki": "Alliance_Party_of_Northern_Ireland"},
+    38:   {"name": "UUP", "wiki": "Ulster_Unionist_Party"},
+    158:  {"name": "TUV", "wiki": "Traditional_Unionist_Voice"},
+    8:    {"name": "Independent", "wiki": None},
+    47:   {"name": "Speaker", "wiki": "Speaker_of_the_House_of_Commons_(UK)"},
+    1115: {"name": "Your Party", "wiki": None},
+    1117: {"name": "Restore Britain", "wiki": None},
 }
 
 
 def fetch_wikipedia_description(wiki_title):
-    """Fetch the first 1-2 sentences of a Wikipedia article."""
+    """Fetch the first 1-2 sentences of a Wikipedia article via the REST API."""
     if not wiki_title:
         return None
-    url = f"https://en.wikipedia.org/wiki/{wiki_title}"
+    # Use the REST summary API — returns a clean extract without HTML parsing
+    url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{wiki_title}"
     try:
-        r = api_get(url, timeout=30)
-        soup = BeautifulSoup(r.text, "html.parser")
-        # Get the first paragraph from the main content
-        content = soup.find("div", class_="mw-content-ltr") or soup
-        paragraphs = content.find_all("p")
-        for p in paragraphs:
-            text = p.get_text(strip=True)
-            if len(text) > 50:  # Skip empty/navigational paragraphs
-                return text[:500]  # First 500 chars (1-2 sentences)
+        r = requests.get(url, timeout=30, headers={
+            "User-Agent": "GovEyeApp/1.0 (https://github.com/Zen0-99/goveye-data)"
+        })
+        if r.status_code == 200:
+            data = r.json()
+            extract = data.get("extract", "")
+            if extract and len(extract) > 50:
+                return extract[:500]
         return None
     except Exception as e:
         logger.warning("Failed to fetch Wikipedia description for %s: %s", wiki_title, e)
