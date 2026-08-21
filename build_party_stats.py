@@ -26,7 +26,7 @@ TABLE_NAMES = ["party_stats"]
 MAJOR_PARTIES = {
     4:    {"name": "Conservative Party", "wiki": "Conservative_Party_(UK)"},
     15:   {"name": "Labour Party", "wiki": "Labour_Party_(UK)"},
-    17:   {"name": "Liberal Democrats", "wiki": "Liberal_Democrats"},
+    17:   {"name": "Liberal Democrats", "wiki": "Liberal_Democrats_(UK)"},
     44:   {"name": "Green Party", "wiki": "Green_Party_of_England_and_Wales"},
     22:   {"name": "Plaid Cymru", "wiki": "Plaid_Cymru"},
     29:   {"name": "SNP", "wiki": "Scottish_National_Party"},
