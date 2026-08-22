@@ -62,7 +62,7 @@ jobs:
           if [ -n "$PREV_RUN" ]; then
             gh run download "$PREV_RUN" --name member_details-db-checkpoint --dir . || echo "No checkpoint from failed run"
             if [ -f member_details.db ]; then
-              echo "Found checkpoint from failed run $PREV_RUN — will resume"
+              echo "Found checkpoint from failed run $PREV_RUN ï¿½ will resume"
             fi
           fi
         env:
@@ -95,12 +95,12 @@ jobs:
       - name: Generate diff patch
         if: steps.download_prev.outputs.has_previous == 'true'
         run: |
-          python diff_db.py --new member_details.db --previous prev_member_details.db --schema schemas/bundled_schema.json --output patch.json --tables mp_synopsis mp_contacts mp_experience
+          python diff_db.py --new member_details.db --previous prev_member_details.db --schema schemas/bundled_schema.json --output patch.json --tables mp_synopsis,mp_contacts,mp_experience
 
       - name: Generate diff patch (first run)
         if: steps.download_prev.outputs.has_previous != 'true'
         run: |
-          python diff_db.py --new member_details.db --schema schemas/bundled_schema.json --output patch.json --tables mp_synopsis mp_contacts mp_experience
+          python diff_db.py --new member_details.db --schema schemas/bundled_schema.json --output patch.json --tables mp_synopsis,mp_contacts,mp_experience
 
       - name: Generate manifest
         if: steps.download_prev.outputs.has_previous == 'true'
