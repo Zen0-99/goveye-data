@@ -97,59 +97,59 @@ jobs:
             case $api in
               mps)
                 echo "Downloading mps.db (changed)"
-                gh release download mps-latest --pattern mps.db --output per-api-cache/mps.db
+                gh release download mps-latest --pattern mps.db --output per-api-cache/mps.db --clobber
                 ;;
               commons_votes)
                 echo "Downloading commons_votes.db (changed)"
-                gh release download commons-votes-latest --pattern commons_votes.db --output per-api-cache/commons_votes.db
+                gh release download commons-votes-latest --pattern commons_votes.db --output per-api-cache/commons_votes.db --clobber
                 ;;
               lords_votes)
                 echo "Downloading lords_votes.db (changed)"
-                gh release download lords-votes-latest --pattern lords_votes.db --output per-api-cache/lords_votes.db
+                gh release download lords-votes-latest --pattern lords_votes.db --output per-api-cache/lords_votes.db --clobber
                 ;;
               bills)
                 echo "Downloading bills.db (changed)"
-                gh release download bills-latest --pattern bills.db --output per-api-cache/bills.db
+                gh release download bills-latest --pattern bills.db --output per-api-cache/bills.db --clobber
                 ;;
               committees)
                 echo "Downloading committees.db (changed)"
-                gh release download committees-latest --pattern committees.db --output per-api-cache/committees.db
+                gh release download committees-latest --pattern committees.db --output per-api-cache/committees.db --clobber
                 ;;
               recess)
                 echo "Downloading recess.db (changed)"
-                gh release download recess-latest --pattern recess.db --output per-api-cache/recess.db
+                gh release download recess-latest --pattern recess.db --output per-api-cache/recess.db --clobber
                 ;;
               interests)
                 echo "Downloading interests.db (changed)"
-                gh release download interests-latest --pattern interests.db --output per-api-cache/interests.db
+                gh release download interests-latest --pattern interests.db --output per-api-cache/interests.db --clobber
                 ;;
               party_stats)
                 echo "Downloading party_stats.db (changed)"
-                gh release download party-stats-latest --pattern party_stats.db --output per-api-cache/party_stats.db
+                gh release download party-stats-latest --pattern party_stats.db --output per-api-cache/party_stats.db --clobber
                 ;;
               bio_data)
                 echo "Downloading bio_data.db (changed)"
-                gh release download bio-data-latest --pattern bio_data.db --output per-api-cache/bio_data.db
+                gh release download bio-data-latest --pattern bio_data.db --output per-api-cache/bio_data.db --clobber
                 ;;
               expenses)
                 echo "Downloading expenses.db (changed)"
-                gh release download expenses-latest --pattern expenses.db --output per-api-cache/expenses.db
+                gh release download expenses-latest --pattern expenses.db --output per-api-cache/expenses.db --clobber
                 ;;
               mp_links)
                 echo "Downloading mp_links.db (changed)"
-                gh release download mp-links-latest --pattern mp_links.db --output per-api-cache/mp_links.db
+                gh release download mp-links-latest --pattern mp_links.db --output per-api-cache/mp_links.db --clobber
                 ;;
               manifestos)
                 echo "Downloading manifestos.db (changed)"
-                gh release download manifestos-latest --pattern manifestos.db --output per-api-cache/manifestos.db
+                gh release download manifestos-latest --pattern manifestos.db --output per-api-cache/manifestos.db --clobber
                 ;;
               historical_members)
                 echo "Downloading historical_members.db (changed)"
-                gh release download historical-members-latest --pattern historical_members.db --output per-api-cache/historical_members.db
+                gh release download historical-members-latest --pattern historical_members.db --output per-api-cache/historical_members.db --clobber
                 ;;
               debates)
                 echo "Downloading debates.db (changed)"
-                gh release download debates-latest --pattern debates.db --output per-api-cache/debates.db
+                gh release download debates-latest --pattern debates.db --output per-api-cache/debates.db --clobber
                 ;;
             esac
           done
