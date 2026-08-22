@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
   "database": {
-    "version": 15,
+    "version": 16,
     "identityHash": "3fec011097763f031bf1a4dbb2805db3",
     "entities": [
       {
@@ -1718,11 +1718,87 @@
             "tag"
           ]
         }
+      },
+      {
+        "tableName": "councils",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `reference` TEXT NOT NULL, `name` TEXT NOT NULL, `website` TEXT, `region` TEXT, `localAuthorityType` TEXT, `statisticalGeography` TEXT, `wikidata` TEXT, `twitter` TEXT, `contactEmail` TEXT, `contactPhone` TEXT, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reference",
+            "columnName": "reference",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "website",
+            "columnName": "website",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "region",
+            "columnName": "region",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "localAuthorityType",
+            "columnName": "localAuthorityType",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "statisticalGeography",
+            "columnName": "statisticalGeography",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "wikidata",
+            "columnName": "wikidata",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "twitter",
+            "columnName": "twitter",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "contactEmail",
+            "columnName": "contactEmail",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "contactPhone",
+            "columnName": "contactPhone",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastUpdated",
+            "columnName": "lastUpdated",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '3fec011097763f031bf1a4dbb2805db3')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'bcf83424a80be77ccc35a7269769f2ef')"
     ]
   }
 }

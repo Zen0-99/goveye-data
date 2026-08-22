@@ -380,7 +380,37 @@ DIVISION_TAG_THRESHOLD = 2
 # For bills, threshold is lower because the bill title is a strong signal.
 BILL_TAG_THRESHOLD = 1
 
-TABLE_NAMES = ["division_tags", "bill_tags"]
+TABLE_NAMES = ["division_tags", "bill_tags", "tag_metadata"]
+
+# --- Tag descriptions (precomputed, stored in tag_metadata table) ---
+TAG_DESCRIPTIONS = {
+    "Universal Credit": "Debates and votes on Universal Credit, the UK's means-tested benefit for working-age people.",
+    "PIP & Disability Benefits": "Personal Independence Payments, Disability Living Allowance, Employment and Support Allowance, and Carer's Allowance.",
+    "Disability": "Disability rights, accessibility, reasonable adjustments, and the Equality Act 2010.",
+    "Welfare & Social Security": "Welfare policy, benefit caps, sanctions, and the social security system.",
+    "Immigration & Asylum": "Immigration policy, asylum claims, refugee rights, border security, and detention.",
+    "Budget & Fiscal": "Government budgets, fiscal policy, public spending, and Treasury statements.",
+    "Taxation": "Income tax, corporation tax, VAT, National Insurance, and duty changes.",
+    "NHS": "National Health Service funding, hospitals, GP services, waiting lists, and healthcare policy.",
+    "Social Care": "Adult and children's social care, care homes, and carer support.",
+    "Mental Health": "Mental health services, psychiatric care, and mental health legislation.",
+    "Education": "Schools, teachers, curriculum, universities, tuition fees, and education policy.",
+    "Children & Families": "Childcare, child protection, parental leave, and family policy.",
+    "Climate & Environment": "Climate change, net zero, carbon emissions, biodiversity, and environmental protection.",
+    "Justice & Crime": "Criminal justice, policing, courts, prisons, sentencing, and probation.",
+    "Human Rights": "Human rights legislation, civil liberties, and the European Convention on Human Rights.",
+    "Defence": "Armed forces, military spending, NATO, veterans, and defence policy.",
+    "Housing": "Housing policy, homelessness, tenants' rights, planning, and affordable housing.",
+    "Transport": "Rail, roads, buses, aviation, HS2, and transport infrastructure.",
+    "Brexit & EU": "Brexit, the EU withdrawal, retained EU law, and UK-EU relations.",
+    "Foreign Policy": "Foreign affairs, international development, aid, and global conflicts.",
+    "Employment & Workers": "Workers' rights, trade unions, minimum wage, strikes, and employment law.",
+    "Business & Enterprise": "Small businesses, SMEs, enterprise policy, and self-employment.",
+    "Energy": "Energy policy, oil and gas, nuclear, renewables, fuel poverty, and energy security.",
+    "Constitutional & Devolution": "Constitutional reform, devolution, Scottish independence, and electoral systems.",
+    "Technology & Digital": "AI, digital policy, online safety, data protection, and cybersecurity.",
+    "Agriculture & Farming": "Farming, agriculture, rural affairs, livestock, and food security.",
+}
 
 
 def count_pattern_hits(text, patterns):
@@ -511,6 +541,40 @@ def build_bill_tags(conn, division_tag_rows):
     return tag_rows
 
 
+def build_tag_metadata(conn, division_tag_rows, bill_tag_rows):
+    """Build tag_metadata table with description + counts per tag."""
+    cursor = conn.cursor()
+
+    # Count divisions and bills per tag
+    div_counts = defaultdict(int)
+    for division_id, tag_name, _ in division_tag_rows:
+        div_counts[tag_name] += 1
+
+    bill_counts = defaultdict(int)
+    for bill_id, tag_name, _ in bill_tag_rows:
+        bill_counts[tag_name] += 1
+
+    # Build metadata rows for all tags in the dictionary
+    rows = []
+    for tag_name in TAG_DICTIONARY:
+        description = TAG_DESCRIPTIONS.get(tag_name, "")
+        div_count = div_counts.get(tag_name, 0)
+        bill_count = bill_counts.get(tag_name, 0)
+        rows.append((tag_name, description, div_count, bill_count))
+
+    # Insert
+    insert_sql = """INSERT OR REPLACE INTO tag_metadata (tag, description, divisionCount, billCount)
+                    VALUES (?, ?, ?, ?)"""
+    cursor.executemany(insert_sql, rows)
+    conn.commit()
+
+    logger.info("Tag metadata: %d tags (%d with divisions, %d with bills)",
+                len(rows),
+                sum(1 for r in rows if r[2] > 0),
+                sum(1 for r in rows if r[3] > 0))
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Build division and bill tags from debate speech text + titles."
@@ -529,13 +593,17 @@ def main():
     # Clear existing tags
     cursor.execute("DELETE FROM division_tags")
     cursor.execute("DELETE FROM bill_tags")
+    cursor.execute("DELETE FROM tag_metadata")
     conn.commit()
 
     # Build division tags
     division_tag_rows = build_division_tags(conn)
 
     # Build bill tags (using division tags as input)
-    build_bill_tags(conn, division_tag_rows)
+    bill_tag_rows = build_bill_tags(conn, division_tag_rows)
+
+    # Build tag metadata (descriptions + counts)
+    build_tag_metadata(conn, division_tag_rows, bill_tag_rows)
 
     conn.close()
     elapsed = time.time() - start

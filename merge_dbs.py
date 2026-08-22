@@ -52,6 +52,7 @@ PER_API_TABLES = {
     "debates_db": ["debate_speeches"],
     "member_details_db": ["mp_synopsis", "mp_contacts", "mp_experience"],
     "hansard_db": ["hansard_contributions"],
+    "councils_db": ["councils"],
 }
 
 
@@ -60,7 +61,7 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
               recess_db=None, interests_db=None, party_stats_db=None,
               bio_data_db=None, expenses_db=None, mp_links_db=None,
               manifestos_db=None, historical_members_db=None, debates_db=None,
-              member_details_db=None, hansard_db=None):
+              member_details_db=None, hansard_db=None, councils_db=None):
     """Merge per-API DBs into a single goveye.db.
 
     Args:
@@ -150,6 +151,41 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
             )
             logger.info("  %s: %d rows copied", table_name, len(rows))
 
+        src_conn.close()
+
+    # --- Post-merge: copy former PM placeholder MPs from interests DB ---
+    # The merged interests DB may contain placeholder MP records for former
+    # PMs (negative IDs) that aren't in mps.db. Copy them so the app can
+    # display their financial interests.
+    if interests_db and os.path.exists(interests_db):
+        src_conn = sqlite3.connect(interests_db)
+        src_cursor = src_conn.cursor()
+        # Find MPs in the interests DB that don't exist in the destination
+        src_cursor.execute("SELECT id FROM mps")
+        src_mp_ids = {row[0] for row in src_cursor.fetchall()}
+        if src_mp_ids:
+            # Check which ones are missing from destination
+            placeholders = ",".join("?" * len(src_mp_ids))
+            cur = conn.cursor()
+            cur.execute(
+                f"SELECT id FROM mps WHERE id IN ({placeholders})",
+                list(src_mp_ids),
+            )
+            existing_ids = {row[0] for row in cur.fetchall()}
+            missing_ids = src_mp_ids - existing_ids
+            if missing_ids:
+                logger.info("Copying %d placeholder MP records from interests DB", len(missing_ids))
+                for mp_id in missing_ids:
+                    src_cursor.execute("SELECT * FROM mps WHERE id = ?", (mp_id,))
+                    row = src_cursor.fetchone()
+                    if row:
+                        columns = [desc[0] for desc in src_cursor.description]
+                        col_list = ", ".join(columns)
+                        placeholders = ", ".join("?" * len(columns))
+                        conn.execute(
+                            f"INSERT OR IGNORE INTO mps ({col_list}) VALUES ({placeholders})",
+                            row,
+                        )
         src_conn.close()
 
     conn.commit()

@@ -88,29 +88,54 @@ def fetch_committee_members(committee_id):
     data = r.json()
     items = data.get("items", [])
 
-    # Filter to current members only
+    # The isCurrent flag from the Committees API is unreliable (returns false
+    # for active members). Instead, determine current membership by checking
+    # if any role has endDate == null (i.e. an ongoing role).
     current_members = []
     for item in items:
         member_info = item.get("memberInfo") or {}
-        if member_info.get("isCurrent", False):
-            mnis_id = member_info.get("mnisId")
-            if mnis_id:
-                current_members.append({
-                    "mnisId": mnis_id,
-                    "name": item.get("name", ""),
-                    "house": member_info.get("house", ""),
-                })
+        mnis_id = member_info.get("mnisId")
+        if not mnis_id:
+            continue
+
+        # Check if any role has no endDate (currently serving)
+        roles = item.get("roles") or []
+        is_current = any(
+            (role.get("endDate") is None)
+            for role in roles
+        )
+        if is_current:
+            current_members.append({
+                "mnisId": mnis_id,
+                "name": item.get("name", ""),
+                "house": member_info.get("house", ""),
+            })
     return current_members
 
 
-def map_committee_to_entity(item, timestamp_millis):
-    """Map a CommitteeItem to a committees table row tuple.
+def fetch_committee_detail(committee_id):
+    """Fetch full details for a single committee from /Committees/{id}.
+
+    Returns the detail dict which includes 'purpose', 'contact', and
+    'websiteLegacyUrl' fields not present in the list endpoint.
+    """
+    r = api_get(
+        f"{COMMITTEES_BASE}Committees/{committee_id}",
+        timeout=60,
+    )
+    return r.json()
+
+
+def map_committee_to_entity(item, detail, timestamp_millis):
+    """Map a CommitteeItem + detail to a committees table row tuple.
 
     isActive is derived from endDate == null (per CommitteeMapper).
     house is a TEXT column (nullable).
+    'detail' is the per-committee detail dict (may be None if fetch failed).
     """
     end_date = item.get("endDate")
     category = item.get("category") or {}
+    contact = (detail or {}).get("contact") or {}
     return (
         item.get("id") or 0,
         item.get("name") or "",
@@ -119,21 +144,25 @@ def map_committee_to_entity(item, timestamp_millis):
         item.get("startDate"),
         end_date,
         1 if end_date is None else 0,  # isActive = (endDate == null)
+        (detail or {}).get("purpose"),
+        contact.get("email"),
+        contact.get("phone"),
+        contact.get("address"),
+        (detail or {}).get("websiteLegacyUrl"),
         timestamp_millis,
     )
 
 
-def insert_committees(conn, items, timestamp_millis):
+def insert_committees(conn, rows):
     """Batch insert committees via INSERT OR REPLACE (dedup by PK id)."""
     cursor = conn.cursor()
     insert_sql = """
         INSERT OR REPLACE INTO committees (
             id, name, house, categoryName, startDate, endDate,
-            isActive, lastUpdated
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            isActive, purpose, contactEmail, contactPhone, contactAddress,
+            websiteUrl, lastUpdated
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
-
-    rows = [map_committee_to_entity(item, timestamp_millis) for item in items]
 
     for i in range(0, len(rows), BATCH_SIZE):
         batch = rows[i:i + BATCH_SIZE]
@@ -166,7 +195,11 @@ def get_processed_committee_ids(conn):
 
 
 def fetch_and_insert_committees(conn, timestamp_millis, skip_committee_ids=None):
-    """Fetch all committees, then per-committee current members, insert + cross-refs.
+    """Fetch all committees, then per-committee detail + current members, insert + cross-refs.
+
+    For each committee, fetches:
+    - Detail (purpose, contact, website) from /Committees/{id}
+    - Current members from /Committees/{id}/Members
 
     If skip_committee_ids is provided, those committees are skipped (already in checkpoint).
     """
@@ -175,28 +208,39 @@ def fetch_and_insert_committees(conn, timestamp_millis, skip_committee_ids=None)
 
     committees = fetch_all_committees()
 
-    # Insert all committee entities first
-    insert_committees(conn, committees, timestamp_millis)
-    logger.info("Inserted %d committee entities", len(committees))
-
     total_cross_refs = 0
     skipped = 0
     committees_with_members = 0
+    entity_rows = []
 
     for committee in committees:
         committee_id = committee.get("id") or 0
+
+        # Fetch detail (purpose, contact, website) — one call per committee
+        detail = None
+        try:
+            detail = fetch_committee_detail(committee_id)
+        except Exception as e:
+            logger.warning("Failed to fetch detail for committee %d: %s", committee_id, e)
+        time.sleep(API_DELAY)
+
+        entity_rows.append(map_committee_to_entity(committee, detail, timestamp_millis))
+
+        # Fetch members (skip if in checkpoint)
         if committee_id in skip_committee_ids:
             skipped += 1
-            continue
+        else:
+            members = fetch_committee_members(committee_id)
+            if members:
+                mp_ids = [m["mnisId"] for m in members]
+                insert_cross_refs(conn, committee_id, mp_ids, timestamp_millis)
+                total_cross_refs += len(mp_ids)
+                committees_with_members += 1
+            time.sleep(API_DELAY)
 
-        members = fetch_committee_members(committee_id)
-        if members:
-            mp_ids = [m["mnisId"] for m in members]
-            insert_cross_refs(conn, committee_id, mp_ids, timestamp_millis)
-            total_cross_refs += len(mp_ids)
-            committees_with_members += 1
-
-        time.sleep(API_DELAY)
+    # Insert all committee entities (with detail) at once
+    insert_committees(conn, entity_rows)
+    logger.info("Inserted %d committee entities (with detail)", len(entity_rows))
 
     logger.info(
         "Committees: %d total, %d with current members, %d cross-refs (%d skipped from checkpoint)",
