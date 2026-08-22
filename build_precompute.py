@@ -167,13 +167,12 @@ def compute_per_mp_metrics(conn):
                 cursor.execute(
                     f"""
                     SELECT divisionId,
-                           SUM(CASE WHEN vote = 'Aye' THEN 1 ELSE 0 END) AS partyAyes,
-                           SUM(CASE WHEN vote = 'No' THEN 1 ELSE 0 END) AS partyNoes
+                           SUM(CASE WHEN UPPER(vote) = 'AYE' THEN 1 ELSE 0 END) AS partyAyes,
+                           SUM(CASE WHEN UPPER(vote) = 'NO' THEN 1 ELSE 0 END) AS partyNoes
                     FROM division_votes
                     WHERE divisionId IN ({placeholders})
                         AND partyName = ?
-                        AND vote != 'NoVoteRecorded'
-                        AND vote != 'No Vote Recorded'
+                        AND UPPER(vote) NOT IN ('NOVOTERECORDED', 'NO VOTE RECORDED')
                     GROUP BY divisionId
                     """,
                     division_ids + [party_name],
@@ -184,8 +183,8 @@ def compute_per_mp_metrics(conn):
                 scored = 0
                 for vote in mp_votes:
                     div_id = vote["divisionId"]
-                    mp_vote = vote["vote"]
-                    if mp_vote not in ("Aye", "No"):
+                    mp_vote = (vote["vote"] or "").upper()
+                    if mp_vote not in ("AYE", "NO"):
                         continue  # skip no-vote-recorded
                     pc = party_counts.get(div_id)
                     if pc is None:
@@ -194,7 +193,7 @@ def compute_per_mp_metrics(conn):
                     noes = pc["partyNoes"]
                     if ayes == noes:
                         continue  # tie — no rebellion
-                    party_majority = "Aye" if ayes > noes else "No"
+                    party_majority = "AYE" if ayes > noes else "NO"
                     if mp_vote != party_majority:
                         rebellions += 1
                     scored += 1
