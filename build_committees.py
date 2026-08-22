@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """Per-API build script for committees (D-10, D-11).
 
-Fetches committees + cross-refs for all 650 MPs from the Committees API
-and builds a per-API DB (committees.db) with only the committees +
-mp_committee_cross_ref tables.
+Fetches all committees from the Committees API, then for each committee
+fetches its current members via /Committees/{id}/Members. Builds a per-API
+DB (committees.db) with the committees + mp_committee_cross_ref tables.
 
-This script makes 650 per-MP API calls (one per MP) plus the initial MP
-fetch — rate limiting (API_DELAY) between each call is critical. Committees
-may appear for multiple MPs; INSERT OR REPLACE deduplicates by primary key.
+The Committees API's ?MemberId= parameter is ignored — it returns all
+committees regardless. The correct approach is to query per-committee
+members and filter to isCurrent=true.
 
 Modes:
-  seed  — create fresh DB, fetch all MPs, per-MP committees, insert
-  delta — copy previous DB, fetch all MPs, per-MP committees, upsert
+  seed  — create fresh DB, fetch all committees + per-committee members
+  delta — copy previous DB, re-fetch all, upsert
 
 Usage:
-  python build_committees.py --output committees.db --schema schemas/8.json --mode seed
-  python build_committees.py --output committees.db --schema schemas/8.json --mode delta --previous-db prev_committees.db
+  python build_committees.py --output committees.db --schema schemas/bundled_schema.json --mode seed
+  python build_committees.py --output committees.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_committees.db
 """
 
 import argparse
@@ -29,34 +29,31 @@ from api_helper import api_get, API_DELAY, BATCH_SIZE, logger
 
 # --- Constants ---
 
-MEMBERS_BASE = "https://members-api.parliament.uk/api/"
 COMMITTEES_BASE = "https://committees-api.parliament.uk/api/"
-PAGE_SIZE_MEMBERS = 20
+COMMITTEES_PAGE_SIZE = 500
 
 TABLE_NAMES = ["committees", "mp_committee_cross_ref"]
 
 
-# --- Members API (need MP IDs to query committees per MP) ---
+# --- Committees API ---
 
-def fetch_all_mps(mp_limit=None):
-    """Fetch all current Commons MPs from the Members API.
+def fetch_all_committees():
+    """Fetch all committees from the Committees API.
 
-    Returns a list of MemberDto dicts (we need their ids to query
-    committees per MP).
+    Returns a list of CommitteeItem dicts with id, name, house, category,
+    startDate, endDate.
     """
-    mps = []
+    committees = []
     skip = 0
 
     while True:
         params = {
-            "House": 1,
-            "IsCurrentMember": "true",
-            "itemsPerPage": PAGE_SIZE_MEMBERS,
-            "skip": skip,
+            "Take": COMMITTEES_PAGE_SIZE,
+            "Skip": skip,
         }
-        logger.info("Fetching MPs: skip=%d", skip)
+        logger.info("Fetching committees: skip=%d", skip)
         r = api_get(
-            f"{MEMBERS_BASE}Members/Search",
+            f"{COMMITTEES_BASE}Committees",
             params=params,
             timeout=60,
         )
@@ -65,39 +62,45 @@ def fetch_all_mps(mp_limit=None):
         if not items:
             break
 
-        for item in items:
-            mps.append(item.get("value", item))
+        committees.extend(items)
 
-        if mp_limit is not None and len(mps) >= mp_limit:
-            mps = mps[:mp_limit]
+        total_results = data.get("totalResults", 0)
+        if len(committees) >= total_results or len(items) < COMMITTEES_PAGE_SIZE:
             break
 
-        if len(items) < PAGE_SIZE_MEMBERS:
-            break
-
-        skip += PAGE_SIZE_MEMBERS
+        skip += COMMITTEES_PAGE_SIZE
         time.sleep(API_DELAY)
 
-    logger.info("Fetched %d MPs", len(mps))
-    return mps
+    logger.info("Fetched %d committees", len(committees))
+    return committees
 
 
-# --- Committees API ---
+def fetch_committee_members(committee_id):
+    """Fetch current members for a single committee.
 
-def fetch_committees_for_mp(mp_id):
-    """Fetch committees for a single MP from the Committees API.
-
-    The API returns {"items": [...]} where each item is a CommitteeItem
-    with `id`, `name`, `house`, `category` (with `name`), `startDate`,
-    `endDate`.
+    Returns a list of member dicts with mnisId (the Members API ID used
+    to match against our mps table) and name.
     """
     r = api_get(
-        f"{COMMITTEES_BASE}Committees",
-        params={"MemberId": mp_id},
+        f"{COMMITTEES_BASE}Committees/{committee_id}/Members",
         timeout=60,
     )
     data = r.json()
-    return data.get("items", [])
+    items = data.get("items", [])
+
+    # Filter to current members only
+    current_members = []
+    for item in items:
+        member_info = item.get("memberInfo") or {}
+        if member_info.get("isCurrent", False):
+            mnis_id = member_info.get("mnisId")
+            if mnis_id:
+                current_members.append({
+                    "mnisId": mnis_id,
+                    "name": item.get("name", ""),
+                    "house": member_info.get("house", ""),
+                })
+    return current_members
 
 
 def map_committee_to_entity(item, timestamp_millis):
@@ -135,85 +138,92 @@ def insert_committees(conn, items, timestamp_millis):
     for i in range(0, len(rows), BATCH_SIZE):
         batch = rows[i:i + BATCH_SIZE]
         cursor.executemany(insert_sql, batch)
-        conn.commit()
+    conn.commit()
 
 
-def insert_cross_refs(conn, mp_id, committee_ids, timestamp_millis):
-    """Insert mp_committee_cross_ref rows for one MP."""
+def insert_cross_refs(conn, committee_id, mp_ids, timestamp_millis):
+    """Insert mp_committee_cross_ref rows for one committee."""
     cursor = conn.cursor()
     insert_sql = """
         INSERT OR REPLACE INTO mp_committee_cross_ref
             (memberId, committeeId, lastUpdated)
         VALUES (?, ?, ?)
     """
-    rows = [(mp_id, cid, timestamp_millis) for cid in committee_ids]
+    rows = [(mp_id, committee_id, timestamp_millis) for mp_id in mp_ids]
     for i in range(0, len(rows), BATCH_SIZE):
         batch = rows[i:i + BATCH_SIZE]
         cursor.executemany(insert_sql, batch)
-        conn.commit()
+    conn.commit()
 
 
 # --- Build modes ---
 
-def get_processed_mp_ids(conn):
-    """Get the set of MP IDs that already have committee cross-refs in the checkpoint DB."""
+def get_processed_committee_ids(conn):
+    """Get the set of committee IDs already processed (in cross-ref table)."""
     cursor = conn.cursor()
-    cursor.execute("SELECT DISTINCT memberId FROM mp_committee_cross_ref")
+    cursor.execute("SELECT DISTINCT committeeId FROM mp_committee_cross_ref")
     return {row[0] for row in cursor.fetchall()}
 
 
-def fetch_and_insert_committees(conn, timestamp_millis, mp_limit=None, skip_mp_ids=None):
-    """Fetch all MPs, then per-MP committees, insert committees + cross-refs.
+def fetch_and_insert_committees(conn, timestamp_millis, skip_committee_ids=None):
+    """Fetch all committees, then per-committee current members, insert + cross-refs.
 
-    If skip_mp_ids is provided, those MPs are skipped (already in checkpoint).
+    If skip_committee_ids is provided, those committees are skipped (already in checkpoint).
     """
-    if skip_mp_ids is None:
-        skip_mp_ids = set()
-    mps = fetch_all_mps(mp_limit=mp_limit)
-    total_committees = 0
+    if skip_committee_ids is None:
+        skip_committee_ids = set()
+
+    committees = fetch_all_committees()
+
+    # Insert all committee entities first
+    insert_committees(conn, committees, timestamp_millis)
+    logger.info("Inserted %d committee entities", len(committees))
+
     total_cross_refs = 0
     skipped = 0
+    committees_with_members = 0
 
-    for mp in mps:
-        mp_id = mp.get("id") or 0
-        if mp_id in skip_mp_ids:
+    for committee in committees:
+        committee_id = committee.get("id") or 0
+        if committee_id in skip_committee_ids:
             skipped += 1
             continue
-        items = fetch_committees_for_mp(mp_id)
-        if items:
-            insert_committees(conn, items, timestamp_millis)
-            committee_ids = [item.get("id") or 0 for item in items]
-            insert_cross_refs(conn, mp_id, committee_ids, timestamp_millis)
-            total_committees += len(items)
-            total_cross_refs += len(committee_ids)
-        time.sleep(API_DELAY)  # Rate limit critical — 650 per-MP calls
+
+        members = fetch_committee_members(committee_id)
+        if members:
+            mp_ids = [m["mnisId"] for m in members]
+            insert_cross_refs(conn, committee_id, mp_ids, timestamp_millis)
+            total_cross_refs += len(mp_ids)
+            committees_with_members += 1
+
+        time.sleep(API_DELAY)
 
     logger.info(
-        "Committees: %d entries, %d cross-refs across %d MPs (%d skipped from checkpoint)",
-        total_committees, total_cross_refs, len(mps), skipped,
+        "Committees: %d total, %d with current members, %d cross-refs (%d skipped from checkpoint)",
+        len(committees), committees_with_members, total_cross_refs, skipped,
     )
 
 
-def build_seed(output_path, schema_path, mp_limit=None, checkpoint_db=None):
-    """Seed mode: create fresh DB, fetch all MPs + per-MP committees.
+def build_seed(output_path, schema_path, checkpoint_db=None):
+    """Seed mode: create fresh DB, fetch all committees + per-committee members.
 
-    If checkpoint_db exists and has data, skip MPs already in mp_committee_cross_ref.
+    If checkpoint_db exists and has data, skip committees already in cross-ref table.
     """
     timestamp_millis = int(time.time() * 1000)
-    skip_mp_ids = set()
+    skip_committee_ids = set()
 
     if checkpoint_db and os.path.exists(checkpoint_db):
         if os.path.abspath(checkpoint_db) != os.path.abspath(output_path):
             shutil.copy2(checkpoint_db, output_path)
         conn = sqlite3.connect(output_path)
-        skip_mp_ids = get_processed_mp_ids(conn)
-        logger.info("Resuming from checkpoint: %d MPs already processed", len(skip_mp_ids))
+        skip_committee_ids = get_processed_committee_ids(conn)
+        logger.info("Resuming from checkpoint: %d committees already processed", len(skip_committee_ids))
     else:
         conn = schema_module.create_database_with_tables(
             output_path, schema_path, TABLE_NAMES,
         )
 
-    fetch_and_insert_committees(conn, timestamp_millis, mp_limit=mp_limit, skip_mp_ids=skip_mp_ids)
+    fetch_and_insert_committees(conn, timestamp_millis, skip_committee_ids=skip_committee_ids)
 
     logger.info("VACUUMing database to minimize file size...")
     conn.execute("VACUUM")
@@ -222,8 +232,8 @@ def build_seed(output_path, schema_path, mp_limit=None, checkpoint_db=None):
     logger.info("Seed build complete: %s", output_path)
 
 
-def build_delta(output_path, previous_db, schema_path, mp_limit=None):
-    """Delta mode: copy previous DB, fetch all MPs + per-MP committees, upsert."""
+def build_delta(output_path, previous_db, schema_path):
+    """Delta mode: copy previous DB, re-fetch all committees + members, upsert."""
     timestamp_millis = int(time.time() * 1000)
 
     shutil.copy2(previous_db, output_path)
@@ -231,7 +241,11 @@ def build_delta(output_path, previous_db, schema_path, mp_limit=None):
 
     conn = sqlite3.connect(output_path)
 
-    fetch_and_insert_committees(conn, timestamp_millis, mp_limit=mp_limit)
+    # Clear old cross-refs — we'll re-fetch all current memberships
+    conn.execute("DELETE FROM mp_committee_cross_ref")
+    conn.commit()
+
+    fetch_and_insert_committees(conn, timestamp_millis)
 
     logger.info("VACUUMing database to minimize file size...")
     conn.execute("VACUUM")
@@ -250,7 +264,7 @@ def main():
     )
     parser.add_argument(
         "--schema", required=True,
-        help="Path to the Room exported schema JSON (8.json).",
+        help="Path to the Room exported schema JSON (bundled_schema.json).",
     )
     parser.add_argument(
         "--mode", choices=["seed", "delta"], default="seed",
@@ -261,12 +275,8 @@ def main():
         help="Path to previous DB file (required for delta mode).",
     )
     parser.add_argument(
-        "--mp-limit", type=int, default=None,
-        help="Limit number of MPs fetched (for testing).",
-    )
-    parser.add_argument(
         "--checkpoint-db",
-        help="Path to a checkpoint DB to resume from (seed mode only). Skips MPs already in mp_committee_cross_ref.",
+        help="Path to a checkpoint DB to resume from (seed mode only). Skips committees already in cross-ref table.",
     )
     args = parser.parse_args()
 
@@ -274,9 +284,9 @@ def main():
         parser.error("--previous-db is required for delta mode")
 
     if args.mode == "seed":
-        build_seed(args.output, args.schema, mp_limit=args.mp_limit, checkpoint_db=args.checkpoint_db)
+        build_seed(args.output, args.schema, checkpoint_db=args.checkpoint_db)
     else:
-        build_delta(args.output, args.previous_db, args.schema, mp_limit=args.mp_limit)
+        build_delta(args.output, args.previous_db, args.schema)
 
 
 if __name__ == "__main__":

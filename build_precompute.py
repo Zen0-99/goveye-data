@@ -126,9 +126,15 @@ def compute_per_mp_metrics(conn):
         committee_count = cursor.fetchone()[0]
 
         # voteParticipationRate — voted divisions / total divisions in house
+        # Must filter by house: an MP should only be credited for voting in
+        # divisions that belong to their house. Without this filter, a Commons
+        # MP who voted in Lords divisions gets a rate > 100%.
         cursor.execute(
-            "SELECT COUNT(DISTINCT divisionId) FROM division_votes WHERE memberId = ?",
-            (member_id,),
+            """SELECT COUNT(DISTINCT dv.divisionId)
+               FROM division_votes dv
+               JOIN divisions d ON dv.divisionId = d.id
+               WHERE dv.memberId = ? AND d.house = ?""",
+            (member_id, house),
         )
         voted_count = cursor.fetchone()[0]
         cursor.execute(
@@ -144,10 +150,13 @@ def compute_per_mp_metrics(conn):
         total_divisions_voted = voted_count
 
         if party_name and voted_count > 0:
-            # Get the MP's votes
+            # Get the MP's votes (only for divisions in their house)
             cursor.execute(
-                "SELECT divisionId, vote FROM division_votes WHERE memberId = ?",
-                (member_id,),
+                """SELECT dv.divisionId, dv.vote
+                   FROM division_votes dv
+                   JOIN divisions d ON dv.divisionId = d.id
+                   WHERE dv.memberId = ? AND d.house = ?""",
+                (member_id, house),
             )
             mp_votes = cursor.fetchall()
 
