@@ -84,7 +84,7 @@ jobs:
           key: commons-votes-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
 
       - name: Upload checkpoint artifact (for failed-run resume)
-        if: steps.download_prev.outputs.has_previous != 'true' && failure()
+        if: steps.download_prev.outputs.has_previous != 'true' && (failure() || cancelled())
         uses: actions/upload-artifact@v4
         with:
           name: commons_votes-db-checkpoint

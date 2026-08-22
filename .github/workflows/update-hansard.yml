@@ -11,7 +11,7 @@ permissions:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # 650 MPs × 0.5s delay + retries ≈ 6-10 min
+    timeout-minutes: 60  # Hansard API is very slow — some MPs take 60s+ with retries
 
     steps:
       - uses: actions/checkout@v4
@@ -86,7 +86,7 @@ jobs:
           key: hansard-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
 
       - name: Upload checkpoint artifact (for failed-run resume)
-        if: steps.download_prev.outputs.has_previous != 'true' && failure()
+        if: steps.download_prev.outputs.has_previous != 'true' && (failure() || cancelled())
         uses: actions/upload-artifact@v4
         with:
           name: hansard-db-checkpoint

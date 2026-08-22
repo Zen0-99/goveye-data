@@ -1,0 +1,39 @@
+name: Update Councils
+
+on:
+  schedule:
+    - cron: '0 6 1 * *'  # Monthly on the 1st at 06:00 UTC
+  workflow_dispatch:  # Manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  build-councils:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build councils DB
+        run: python build_councils.py --output councils.db
+
+      - name: Upload councils-latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Create or update the councils-latest release
+          gh release create councils-latest \
+            --title "Councils Latest" \
+            --notes "Auto-generated councils database" \
+            --latest \
+            councils.db || \
+          gh release upload councils-latest councils.db --clobber
