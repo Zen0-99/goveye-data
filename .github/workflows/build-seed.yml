@@ -200,6 +200,11 @@ jobs:
         run: |
           python build_precompute.py --output goveye.db --schema schemas/bundled_schema.json
 
+      - name: Build division and bill tags
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          python build_tags.py --output goveye.db --schema schemas/bundled_schema.json
+
       - name: Validate merged schema
         if: steps.check.outputs.needs_update == 'true'
         run: |
@@ -236,11 +241,12 @@ jobs:
             Seed database for GovEye — the first-launch download source (D-04).
 
             - **goveye.db**: Full merged SQLite database (all 16 tables, all 650 MPs
-              + all historical voting data + bills + committees + recess dates
-              + Register of Members' Financial Interests)
+              + 8 former PM placeholders + all historical voting data + bills +
+              committees + recess dates + Register of Members' Financial Interests
+              including historical data from 2000-2026 via mySociety)
             - **seed-manifest.json**: Per-API dbHash tracking for incremental seed updates
 
-            Built by downloading the 7 per-API DBs from their respective release tags
+            Built by downloading the per-API DBs from their respective release tags
             and merging them with merge_dbs.py. Only re-merged when a per-API dbHash
             changes (checked every 6 hours).
           files: |

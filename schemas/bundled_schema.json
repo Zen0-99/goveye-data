@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
   "database": {
-    "version": 13,
-    "identityHash": "8e80759689979a7f64cb1a0847c69737",
+    "version": 15,
+    "identityHash": "3fec011097763f031bf1a4dbb2805db3",
     "entities": [
       {
         "tableName": "mps",
@@ -179,7 +179,7 @@
       },
       {
         "tableName": "committees",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `name` TEXT NOT NULL, `house` TEXT, `categoryName` TEXT, `startDate` TEXT, `endDate` TEXT, `isActive` INTEGER NOT NULL, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `name` TEXT NOT NULL, `house` TEXT, `categoryName` TEXT, `startDate` TEXT, `endDate` TEXT, `isActive` INTEGER NOT NULL, `purpose` TEXT, `contactEmail` TEXT, `contactPhone` TEXT, `contactAddress` TEXT, `websiteUrl` TEXT, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -218,6 +218,31 @@
             "columnName": "isActive",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "purpose",
+            "columnName": "purpose",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "contactEmail",
+            "columnName": "contactEmail",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "contactPhone",
+            "columnName": "contactPhone",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "contactAddress",
+            "columnName": "contactAddress",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "websiteUrl",
+            "columnName": "websiteUrl",
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "lastUpdated",
@@ -1631,11 +1656,73 @@
             "id"
           ]
         }
+      },
+      {
+        "tableName": "division_tags",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`divisionId` INTEGER NOT NULL, `tag` TEXT NOT NULL, `hitCount` INTEGER NOT NULL, PRIMARY KEY(`divisionId`, `tag`))",
+        "fields": [
+          {
+            "fieldPath": "divisionId",
+            "columnName": "divisionId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tag",
+            "columnName": "tag",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hitCount",
+            "columnName": "hitCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "divisionId",
+            "tag"
+          ]
+        }
+      },
+      {
+        "tableName": "bill_tags",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`billId` INTEGER NOT NULL, `tag` TEXT NOT NULL, `hitCount` INTEGER NOT NULL, PRIMARY KEY(`billId`, `tag`))",
+        "fields": [
+          {
+            "fieldPath": "billId",
+            "columnName": "billId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tag",
+            "columnName": "tag",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hitCount",
+            "columnName": "hitCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "billId",
+            "tag"
+          ]
+        }
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '8e80759689979a7f64cb1a0847c69737')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '3fec011097763f031bf1a4dbb2805db3')"
     ]
   }
 }
