@@ -11,7 +11,7 @@ permissions:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # 650 MPs × 0.3s delay ≈ 3-4 min
+    timeout-minutes: 30  # 650 MPs × 0.5s delay + retries ≈ 6-10 min
 
     steps:
       - uses: actions/checkout@v4

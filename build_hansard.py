@@ -37,22 +37,35 @@ TABLE_NAMES = ["hansard_contributions"]
 
 # --- Hansard API ---
 
-def fetch_member_counts(member_id, timeout=30):
+def fetch_member_counts(member_id, timeout=60, max_retries=3):
     """Fetch contribution counts for a single MP from the Hansard API.
 
     Returns (total_contributions, total_written_answers).
+    Retries on timeout with exponential backoff.
     """
-    r = requests.get(HANSARD_API, params={
-        "memberId": member_id,
-        "itemsPerPage": 1,
-    }, timeout=timeout)
-    if r.status_code != 200:
-        logger.warning("Hansard API returned %d for memberId=%d", r.status_code, member_id)
-        return 0, 0
-    data = r.json()
-    total_contributions = data.get("TotalContributions", 0)
-    total_written_answers = data.get("TotalWrittenAnswers", 0)
-    return total_contributions, total_written_answers
+    for attempt in range(max_retries):
+        try:
+            r = requests.get(HANSARD_API, params={
+                "memberId": member_id,
+                "itemsPerPage": 1,
+            }, timeout=timeout)
+            if r.status_code != 200:
+                logger.warning("Hansard API returned %d for memberId=%d", r.status_code, member_id)
+                return 0, 0
+            data = r.json()
+            total_contributions = data.get("TotalContributions", 0)
+            total_written_answers = data.get("TotalWrittenAnswers", 0)
+            return total_contributions, total_written_answers
+        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
+            if attempt < max_retries - 1:
+                wait = 2 ** attempt  # 1s, 2s, 4s
+                logger.warning("Hansard API timeout for memberId=%d (attempt %d/%d), retrying in %ds",
+                               member_id, attempt + 1, max_retries, wait)
+                time.sleep(wait)
+            else:
+                logger.warning("Hansard API failed for memberId=%d after %d retries: %s",
+                               member_id, max_retries, e)
+                return 0, 0
 
 
 def fetch_all_mps_from_db(mps_db_path):
@@ -143,7 +156,7 @@ def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=No
             # Insert in batches so checkpoint resume works
             insert_counts(conn, counts, timestamp_millis)
             counts = []
-        time.sleep(0.3)  # Be gentle with the API
+        time.sleep(0.5)  # Be gentle with the Hansard API (it's slow)
 
     if counts:
         insert_counts(conn, counts, timestamp_millis)
