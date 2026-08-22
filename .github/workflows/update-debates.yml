@@ -453,8 +453,164 @@ jobs:
           path: debates.db
           retention-days: 1
 
+  seed-batch-7:
+    needs: seed-batch-6
+    if: needs.seed-batch-6.outputs.more_work == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    outputs:
+      more_work: ${{ steps.build.outputs.more_work }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Download dependency DBs
+        uses: actions/download-artifact@v4
+        with:
+          name: dependency-dbs
+      - name: Download previous checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: debates-checkpoint-6
+      - name: Build seed batch 7
+        id: build
+        run: |
+          set +e
+          python build_debates.py \
+            --output debates.db \
+            --schema schemas/bundled_schema.json \
+            --mode seed \
+            --commons-db commons_votes.db \
+            --lords-db lords_votes.db \
+            --mps-db mps.db \
+            --historical-members-db historical_members.db \
+            --checkpoint-db debates.db \
+            --max-debates 500
+          code=$?
+          set -e
+          if [ $code -eq 2 ]; then
+            echo "more_work=true" >> $GITHUB_OUTPUT
+          elif [ $code -ne 0 ]; then
+            exit $code
+          else
+            echo "more_work=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Upload checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: debates-checkpoint-7
+          path: debates.db
+          retention-days: 1
+
+  seed-batch-8:
+    needs: seed-batch-7
+    if: needs.seed-batch-7.outputs.more_work == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    outputs:
+      more_work: ${{ steps.build.outputs.more_work }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Download dependency DBs
+        uses: actions/download-artifact@v4
+        with:
+          name: dependency-dbs
+      - name: Download previous checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: debates-checkpoint-7
+      - name: Build seed batch 8
+        id: build
+        run: |
+          set +e
+          python build_debates.py \
+            --output debates.db \
+            --schema schemas/bundled_schema.json \
+            --mode seed \
+            --commons-db commons_votes.db \
+            --lords-db lords_votes.db \
+            --mps-db mps.db \
+            --historical-members-db historical_members.db \
+            --checkpoint-db debates.db \
+            --max-debates 500
+          code=$?
+          set -e
+          if [ $code -eq 2 ]; then
+            echo "more_work=true" >> $GITHUB_OUTPUT
+          elif [ $code -ne 0 ]; then
+            exit $code
+          else
+            echo "more_work=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Upload checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: debates-checkpoint-8
+          path: debates.db
+          retention-days: 1
+
+  seed-batch-9:
+    needs: seed-batch-8
+    if: needs.seed-batch-8.outputs.more_work == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    outputs:
+      more_work: ${{ steps.build.outputs.more_work }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Download dependency DBs
+        uses: actions/download-artifact@v4
+        with:
+          name: dependency-dbs
+      - name: Download previous checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: debates-checkpoint-8
+      - name: Build seed batch 9
+        id: build
+        run: |
+          set +e
+          python build_debates.py \
+            --output debates.db \
+            --schema schemas/bundled_schema.json \
+            --mode seed \
+            --commons-db commons_votes.db \
+            --lords-db lords_votes.db \
+            --mps-db mps.db \
+            --historical-members-db historical_members.db \
+            --checkpoint-db debates.db \
+            --max-debates 500
+          code=$?
+          set -e
+          if [ $code -eq 2 ]; then
+            echo "more_work=true" >> $GITHUB_OUTPUT
+          elif [ $code -ne 0 ]; then
+            exit $code
+          else
+            echo "more_work=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Upload checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: debates-checkpoint-9
+          path: debates.db
+          retention-days: 1
+
   publish:
-    needs: [prepare, seed-batch-1, seed-batch-2, seed-batch-3, seed-batch-4, seed-batch-5, seed-batch-6]
+    needs: [prepare, seed-batch-1, seed-batch-2, seed-batch-3, seed-batch-4, seed-batch-5, seed-batch-6, seed-batch-7, seed-batch-8, seed-batch-9]
     if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -496,7 +652,7 @@ jobs:
         run: |
           # Try checkpoint artifacts in reverse order — the highest-numbered
           # one that exists is the final checkpoint from the chain.
-          for i in 6 5 4 3 2 1; do
+          for i in 9 8 7 6 5 4 3 2 1; do
             rm -rf checkpoint
             if gh run download "$GITHUB_RUN_ID" \
                  --repo "${{ github.repository }}" \
