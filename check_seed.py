@@ -45,6 +45,12 @@ PER_API = [
     ("recess", "recess-manifest", "recess"),
     ("interests", "interests-manifest", "interests"),
     ("party_stats", "party-stats-manifest", "party_stats"),
+    ("bio_data", "bio-data-manifest", "bio_data"),
+    ("expenses", "expenses-manifest", "expenses"),
+    ("mp_links", "mp-links-manifest", "mp_links"),
+    ("manifestos", "manifestos-manifest", "manifestos"),
+    ("historical_members", "historical-members-manifest", "historical_members"),
+    ("debates", "debates-manifest", "debates"),
 ]
 
 
@@ -118,6 +124,12 @@ def main():
     parser.add_argument("--recess-manifest", default=None)
     parser.add_argument("--interests-manifest", default=None)
     parser.add_argument("--party-stats-manifest", default=None)
+    parser.add_argument("--bio-data-manifest", default=None)
+    parser.add_argument("--expenses-manifest", default=None)
+    parser.add_argument("--mp-links-manifest", default=None)
+    parser.add_argument("--manifestos-manifest", default=None)
+    parser.add_argument("--historical-members-manifest", default=None)
+    parser.add_argument("--debates-manifest", default=None)
     args = parser.parse_args()
 
     per_api_paths = {
@@ -129,6 +141,12 @@ def main():
         "recess": args.recess_manifest,
         "interests": args.interests_manifest,
         "party_stats": args.party_stats_manifest,
+        "bio_data": args.bio_data_manifest,
+        "expenses": args.expenses_manifest,
+        "mp_links": args.mp_links_manifest,
+        "manifestos": args.manifestos_manifest,
+        "historical_members": args.historical_members_manifest,
+        "debates": args.debates_manifest,
     }
 
     needs_update, changed_apis = check_seed(args.seed_manifest, per_api_paths)

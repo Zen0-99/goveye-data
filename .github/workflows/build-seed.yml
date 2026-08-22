@@ -45,6 +45,12 @@ jobs:
           gh release download recess-latest --pattern manifest.json --output recess_manifest.json || echo "WARN: recess manifest not found"
           gh release download interests-latest --pattern manifest.json --output interests_manifest.json || echo "WARN: interests manifest not found"
           gh release download party-stats-latest --pattern manifest.json --output party_stats_manifest.json || echo "WARN: party-stats manifest not found"
+          gh release download bio-data-latest --pattern manifest.json --output bio_data_manifest.json || echo "WARN: bio-data manifest not found"
+          gh release download expenses-latest --pattern manifest.json --output expenses_manifest.json || echo "WARN: expenses manifest not found"
+          gh release download mp-links-latest --pattern manifest.json --output mp_links_manifest.json || echo "WARN: mp-links manifest not found"
+          gh release download manifestos-latest --pattern manifest.json --output manifestos_manifest.json || echo "WARN: manifestos manifest not found"
+          gh release download historical-members-latest --pattern manifest.json --output historical_members_manifest.json || echo "WARN: historical-members manifest not found"
+          gh release download debates-latest --pattern manifest.json --output debates_manifest.json || echo "WARN: debates manifest not found"
 
       - name: Check if seed needs update
         id: check
@@ -58,7 +64,13 @@ jobs:
             --committees-manifest committees_manifest.json \
             --recess-manifest recess_manifest.json \
             --interests-manifest interests_manifest.json \
-            --party-stats-manifest party_stats_manifest.json >> $GITHUB_OUTPUT
+            --party-stats-manifest party_stats_manifest.json \
+            --bio-data-manifest bio_data_manifest.json \
+            --expenses-manifest expenses_manifest.json \
+            --mp-links-manifest mp_links_manifest.json \
+            --manifestos-manifest manifestos_manifest.json \
+            --historical-members-manifest historical_members_manifest.json \
+            --debates-manifest debates_manifest.json >> $GITHUB_OUTPUT
 
       # --- Phase 2: Merge (only if data changed) ---
 
@@ -68,7 +80,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: per-api-cache
-          key: per-api-dbs-${{ hashFiles('mps_manifest.json', 'commons_manifest.json', 'lords_manifest.json', 'bills_manifest.json', 'committees_manifest.json', 'recess_manifest.json', 'interests_manifest.json', 'party_stats_manifest.json') }}
+          key: per-api-dbs-${{ hashFiles('mps_manifest.json', 'commons_manifest.json', 'lords_manifest.json', 'bills_manifest.json', 'committees_manifest.json', 'recess_manifest.json', 'interests_manifest.json', 'party_stats_manifest.json', 'bio_data_manifest.json', 'expenses_manifest.json', 'mp_links_manifest.json', 'manifestos_manifest.json', 'historical_members_manifest.json', 'debates_manifest.json') }}
           restore-keys: |
             per-api-dbs-
 
@@ -115,6 +127,30 @@ jobs:
                 echo "Downloading party_stats.db (changed)"
                 gh release download party-stats-latest --pattern party_stats.db --output per-api-cache/party_stats.db
                 ;;
+              bio_data)
+                echo "Downloading bio_data.db (changed)"
+                gh release download bio-data-latest --pattern bio_data.db --output per-api-cache/bio_data.db
+                ;;
+              expenses)
+                echo "Downloading expenses.db (changed)"
+                gh release download expenses-latest --pattern expenses.db --output per-api-cache/expenses.db
+                ;;
+              mp_links)
+                echo "Downloading mp_links.db (changed)"
+                gh release download mp-links-latest --pattern mp_links.db --output per-api-cache/mp_links.db
+                ;;
+              manifestos)
+                echo "Downloading manifestos.db (changed)"
+                gh release download manifestos-latest --pattern manifestos.db --output per-api-cache/manifestos.db
+                ;;
+              historical_members)
+                echo "Downloading historical_members.db (changed)"
+                gh release download historical-members-latest --pattern historical_members.db --output per-api-cache/historical_members.db
+                ;;
+              debates)
+                echo "Downloading debates.db (changed)"
+                gh release download debates-latest --pattern debates.db --output per-api-cache/debates.db
+                ;;
             esac
           done
 
@@ -122,7 +158,7 @@ jobs:
         if: steps.check.outputs.needs_update == 'true'
         run: |
           missing=0
-          for db in mps.db commons_votes.db lords_votes.db bills.db committees.db recess.db interests.db party_stats.db; do
+          for db in mps.db commons_votes.db lords_votes.db bills.db committees.db recess.db interests.db party_stats.db bio_data.db expenses.db mp_links.db manifestos.db historical_members.db debates.db; do
             if [ ! -f "per-api-cache/$db" ]; then
               echo "ERROR: $db is missing — cannot build a complete seed"
               missing=1
@@ -132,7 +168,7 @@ jobs:
             echo "One or more per-API DBs are missing. Ensure all per-API workflows have completed at least one successful run before building the seed."
             exit 1
           fi
-          echo "All 7 per-API DBs present."
+          echo "All 14 per-API DBs present."
 
       - name: Merge per-API DBs into goveye.db
         if: steps.check.outputs.needs_update == 'true'
@@ -141,7 +177,10 @@ jobs:
             --mps-db per-api-cache/mps.db --commons-votes-db per-api-cache/commons_votes.db \
             --lords-votes-db per-api-cache/lords_votes.db --bills-db per-api-cache/bills.db \
             --committees-db per-api-cache/committees.db --recess-db per-api-cache/recess.db \
-            --interests-db per-api-cache/interests.db --party-stats-db per-api-cache/party_stats.db
+            --interests-db per-api-cache/interests.db --party-stats-db per-api-cache/party_stats.db \
+            --bio-data-db per-api-cache/bio_data.db --expenses-db per-api-cache/expenses.db \
+            --mp-links-db per-api-cache/mp_links.db --manifestos-db per-api-cache/manifestos.db \
+            --historical-members-db per-api-cache/historical_members.db --debates-db per-api-cache/debates.db
 
       - name: Precompute stats tables (mp_stats + peer_averages)
         if: steps.check.outputs.needs_update == 'true'
@@ -164,7 +203,13 @@ jobs:
             --committees-manifest committees_manifest.json \
             --recess-manifest recess_manifest.json \
             --interests-manifest interests_manifest.json \
-            --party-stats-manifest party_stats_manifest.json
+            --party-stats-manifest party_stats_manifest.json \
+            --bio-data-manifest bio_data_manifest.json \
+            --expenses-manifest expenses_manifest.json \
+            --mp-links-manifest mp_links_manifest.json \
+            --manifestos-manifest manifestos_manifest.json \
+            --historical-members-manifest historical_members_manifest.json \
+            --debates-manifest debates_manifest.json
 
       - name: Publish to GitHub Releases
         if: steps.check.outputs.needs_update == 'true'
@@ -194,7 +239,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: per-api-cache
-          key: per-api-dbs-${{ hashFiles('mps_manifest.json', 'commons_manifest.json', 'lords_manifest.json', 'bills_manifest.json', 'committees_manifest.json', 'recess_manifest.json', 'interests_manifest.json', 'party_stats_manifest.json') }}
+          key: per-api-dbs-${{ hashFiles('mps_manifest.json', 'commons_manifest.json', 'lords_manifest.json', 'bills_manifest.json', 'committees_manifest.json', 'recess_manifest.json', 'interests_manifest.json', 'party_stats_manifest.json', 'bio_data_manifest.json', 'expenses_manifest.json', 'mp_links_manifest.json', 'manifestos_manifest.json', 'historical_members_manifest.json', 'debates_manifest.json') }}
 
       - name: No changes — skipping merge
         if: steps.check.outputs.needs_update == 'false'

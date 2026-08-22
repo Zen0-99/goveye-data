@@ -44,12 +44,20 @@ PER_API_TABLES = {
     "recess_db": ["recess_dates", "recess_dates_meta"],
     "interests_db": ["interests"],
     "party_stats_db": ["party_stats"],
+    "bio_data_db": ["bio_data"],
+    "expenses_db": ["expenses"],
+    "mp_links_db": ["mp_links"],
+    "manifestos_db": ["party_manifestos"],
+    "historical_members_db": ["historical_members"],
+    "debates_db": ["debate_speeches"],
 }
 
 
 def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
               lords_votes_db=None, bills_db=None, committees_db=None,
-              recess_db=None, interests_db=None, party_stats_db=None):
+              recess_db=None, interests_db=None, party_stats_db=None,
+              bio_data_db=None, expenses_db=None, mp_links_db=None,
+              manifestos_db=None, historical_members_db=None, debates_db=None):
     """Merge per-API DBs into a single goveye.db.
 
     Args:
@@ -87,6 +95,12 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
         "recess_db": recess_db,
         "interests_db": interests_db,
         "party_stats_db": party_stats_db,
+        "bio_data_db": bio_data_db,
+        "expenses_db": expenses_db,
+        "mp_links_db": mp_links_db,
+        "manifestos_db": manifestos_db,
+        "historical_members_db": historical_members_db,
+        "debates_db": debates_db,
     }
 
     for arg_name, db_path in source_dbs.items():
@@ -152,6 +166,12 @@ def main():
     parser.add_argument("--recess-db", default=None, help="Path to recess.db")
     parser.add_argument("--interests-db", default=None, help="Path to interests.db")
     parser.add_argument("--party-stats-db", default=None, help="Path to party_stats.db")
+    parser.add_argument("--bio-data-db", default=None, help="Path to bio_data.db")
+    parser.add_argument("--expenses-db", default=None, help="Path to expenses.db")
+    parser.add_argument("--mp-links-db", default=None, help="Path to mp_links.db")
+    parser.add_argument("--manifestos-db", default=None, help="Path to manifestos.db")
+    parser.add_argument("--historical-members-db", default=None, help="Path to historical_members.db")
+    parser.add_argument("--debates-db", default=None, help="Path to debates.db")
     args = parser.parse_args()
 
     merge_dbs(
@@ -164,6 +184,12 @@ def main():
         recess_db=args.recess_db,
         interests_db=args.interests_db,
         party_stats_db=args.party_stats_db,
+        bio_data_db=args.bio_data_db,
+        expenses_db=args.expenses_db,
+        mp_links_db=args.mp_links_db,
+        manifestos_db=args.manifestos_db,
+        historical_members_db=args.historical_members_db,
+        debates_db=args.debates_db,
     )
 
 
