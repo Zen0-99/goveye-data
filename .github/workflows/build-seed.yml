@@ -137,6 +137,11 @@ jobs:
             --committees-db per-api-cache/committees.db --recess-db per-api-cache/recess.db \
             --interests-db per-api-cache/interests.db
 
+      - name: Precompute stats tables (mp_stats + peer_averages)
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          python build_precompute.py --output goveye.db --schema schemas/bundled_schema.json
+
       - name: Validate merged schema
         if: steps.check.outputs.needs_update == 'true'
         run: |
