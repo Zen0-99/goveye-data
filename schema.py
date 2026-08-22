@@ -222,5 +222,13 @@ def create_database_with_tables(output_path, schema_path, table_names):
     for setup_query in get_setup_queries(schema):
         cursor.execute(setup_query)
 
+    # 4. Set PRAGMA user_version to the Room database version.
+    # Room checks both the identity hash (in room_master_table) AND the
+    # user_version pragma on open. If user_version is 0 (SQLite default)
+    # but Room expects e.g. 11, it treats this as a migration from 0→11.
+    # With fallbackToDestructiveMigration, that drops all tables and
+    # recreates them empty — wiping the seed data.
+    cursor.execute(f"PRAGMA user_version = {db_version}")
+
     conn.commit()
     return conn
