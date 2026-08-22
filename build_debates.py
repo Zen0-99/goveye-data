@@ -29,6 +29,7 @@ import os
 import re
 import shutil
 import sqlite3
+import sys
 import time
 
 from bs4 import BeautifulSoup
@@ -280,8 +281,15 @@ def extract_debate_gid(twfy_url):
 # --- Build modes ---
 
 def build_seed(output_path, schema_path, commons_db, lords_db, mps_db,
-               divisions_limit=None, checkpoint_db=None, historical_members_db=None):
-    """Seed mode: fetch all debate pages and build a fresh debates.db."""
+               divisions_limit=None, checkpoint_db=None, historical_members_db=None,
+               max_debates=None):
+    """Seed mode: fetch all debate pages and build a fresh debates.db.
+
+    If max_debates is set, processes at most that many new debates before
+    saving the checkpoint DB and returning. Returns True if more debates
+    remain to be processed (caller should exit with code 2 so the CI chain
+    can spawn the next batch).
+    """
     timestamp_millis = int(time.time() * 1000)
 
     # Build name lookup for MP matching
@@ -341,6 +349,7 @@ def build_seed(output_path, schema_path, commons_db, lords_db, mps_db,
             division_to_debate.setdefault(gid, []).append((division_id, clean_url))
 
     processed = 0
+    more_work = False
     for gid, primary_division_id, clean_url in unique_debates:
         if gid in existing_gids:
             continue
@@ -384,11 +393,25 @@ def build_seed(output_path, schema_path, commons_db, lords_db, mps_db,
 
         time.sleep(API_DELAY)
 
+        # Stop after processing max_debates new debates — checkpoint is
+        # already saved (committed per-debate above), so the CI chain can
+        # resume from this DB in the next batch job.
+        if max_debates and processed >= max_debates:
+            more_work = True
+            break
+
     conn.commit()
     logger.info("VACUUMing database...")
     conn.execute("VACUUM")
     conn.close()
-    logger.info("Seed build complete: %s (%d debates processed)", output_path, processed)
+
+    if more_work:
+        logger.info("Reached max-debates limit (%d processed). Checkpoint saved to %s",
+                    processed, output_path)
+    else:
+        logger.info("Seed build complete: %s (%d debates processed)", output_path, processed)
+
+    return more_work
 
 
 def build_delta(output_path, previous_db, schema_path, commons_db, lords_db, mps_db,
@@ -523,6 +546,12 @@ def main():
         help="Path to a checkpoint DB to resume from (seed mode only).",
     )
     parser.add_argument(
+        "--max-debates", type=int, default=None,
+        help="Maximum number of new debates to process per run (seed mode only). "
+             "When the limit is reached, the checkpoint DB is saved and the script "
+             "exits with code 2 to signal that more work remains.",
+    )
+    parser.add_argument(
         "--historical-members-db",
         help="Path to historical_members.db (for TWFY person ID → Parliament member ID matching).",
     )
@@ -532,7 +561,7 @@ def main():
         parser.error("--previous-db is required for delta mode")
 
     if args.mode == "seed":
-        build_seed(
+        more_work = build_seed(
             args.output, args.schema,
             commons_db=args.commons_db,
             lords_db=args.lords_db,
@@ -540,7 +569,10 @@ def main():
             divisions_limit=args.divisions_limit,
             checkpoint_db=args.checkpoint_db,
             historical_members_db=args.historical_members_db,
+            max_debates=args.max_debates,
         )
+        if more_work:
+            sys.exit(2)
     else:
         build_delta(
             args.output, args.previous_db, args.schema,
