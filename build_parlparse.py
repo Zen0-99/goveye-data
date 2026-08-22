@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """Per-API build script for ParlParse social links (Phase 11, plan 11-03).
 
-Downloads ParlParse people.json (Popolo format), extracts social media links
-and Wikipedia URLs for all MPs, matches to Parliament member IDs, and builds
-a per-API DB (mp_links.db) with only the mp_links table.
+Downloads ParlParse people.json (Popolo format) and separate social-media
+XML files, extracts social media links and website URLs for all MPs,
+matches to Parliament member IDs via datadotparl_id, and builds a per-API
+DB (mp_links.db) with only the mp_links table.
 
-ParlParse people.json URL: https://parser.theyworkforyou.com/people.json
+ParlParse data URLs:
+  people.json:           https://raw.githubusercontent.com/mysociety/parlparse/master/members/people.json
+  social-media-commons:  https://raw.githubusercontent.com/mysociety/parlparse/master/members/social-media-commons.xml
+  websites:              https://raw.githubusercontent.com/mysociety/parlparse/master/members/websites.xml
 
 Modes:
-  seed  — create fresh DB, download JSON, parse, insert
-  delta — copy previous DB, download latest JSON, upsert
+  seed  — create fresh DB, download data, parse, insert
+  delta — copy previous DB, download latest data, upsert
 
 Usage:
   python build_parlparse.py --output mp_links.db --schema schemas/bundled_schema.json --mode seed --mps-db mps.db
@@ -22,6 +26,7 @@ import os
 import shutil
 import sqlite3
 import time
+import xml.etree.ElementTree as ET
 
 import requests
 
@@ -30,162 +35,149 @@ from api_helper import BATCH_SIZE, api_get, logger
 
 # --- Constants ---
 
-PARLPARSE_PEOPLE_URL = "https://raw.githubusercontent.com/mysociety/parlparse/master/members/people.json"
+PARLPARSE_BASE = "https://raw.githubusercontent.com/mysociety/parlparse/master/members/"
+PARLPARSE_PEOPLE_URL = PARLPARSE_BASE + "people.json"
+PARLPARSE_SOCIAL_URL = PARLPARSE_BASE + "social-media-commons.xml"
+PARLPARSE_WEBSITES_URL = PARLPARSE_BASE + "websites.xml"
 TABLE_NAMES = ["mp_links"]
 
-# --- Honorifics stripping (reused from build_debates.py) ---
 
-_HONORIFICS = {
-    "mr", "mrs", "ms", "miss", "dr", "sir", "dame", "lord", "lady",
-    "baroness", "earl", "viscount", "rt", "hon", "right", "rev",
-    "reverend", "father", "fr",
-}
-
-
-def _strip_honorifics(name):
-    """Strip leading honorifics from a name."""
-    if not name:
-        return ""
-    words = name.strip().split()
-    while words and words[0].lower().rstrip(".") in _HONORIFICS:
-        words.pop(0)
-    return " ".join(words)
-
-
-def build_name_lookup(mps_db_path):
-    """Build a name -> memberId lookup from the MPs DB."""
-    conn = sqlite3.connect(mps_db_path)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, nameDisplayAs, nameListAs FROM mps WHERE house = 1")
-    lookup = {}
-    for row in cursor.fetchall():
-        mp_id, display_name, list_name = row
-        if display_name:
-            stripped = _strip_honorifics(display_name)
-            lookup[stripped.lower().strip()] = mp_id
-        if list_name:
-            parts = list_name.split(", ")
-            if len(parts) == 2:
-                reversed_name = f"{parts[1]} {parts[0]}"
-                stripped = _strip_honorifics(reversed_name)
-                lookup[stripped.lower().strip()] = mp_id
-    conn.close()
-    logger.info("Built name lookup: %d MPs", len(lookup))
-    return lookup
-
-
-def match_person(name, lookup):
-    """Match a ParlParse person name to a Parliament member ID. Returns 0 if no match."""
-    if not name:
-        return 0
-    stripped = _strip_honorifics(name).lower().strip()
-    if stripped in lookup:
-        return lookup[stripped]
-    # Try without middle initials
-    words = stripped.split()
-    if len(words) > 2:
-        filtered = [w for w in words if len(w) > 1]
-        if len(filtered) >= 2:
-            reduced = " ".join(filtered)
-            if reduced in lookup:
-                return lookup[reduced]
-    return 0
-
-
-# --- JSON parsing ---
+# --- Person ID mapping ---
 
 def download_people_json():
-    """Download ParlParse people.json and return the parsed JSON object."""
+    """Download ParlParse people.json and build a mapping from
+    ParlParse person ID → datadotparl_id (Parliament MP ID).
+
+    Returns a dict: {parlparse_id: datadotparl_id}
+    """
     logger.info("Downloading ParlParse people.json...")
     try:
         r = api_get(PARLPARSE_PEOPLE_URL, timeout=120)
         data = r.json()
         persons = data.get("persons", data) if isinstance(data, dict) else data
         logger.info("Downloaded people.json: %d persons", len(persons) if isinstance(persons, list) else 0)
-        return persons
+
+        id_map = {}
+        for person in persons:
+            parlparse_id = person.get("id", "")
+            if not parlparse_id:
+                continue
+            for ident in person.get("identifiers", []):
+                if ident.get("scheme") == "datadotparl_id":
+                    try:
+                        id_map[parlparse_id] = int(ident.get("identifier"))
+                    except (ValueError, TypeError):
+                        pass
+                    break
+
+        logger.info("Mapped %d ParlParse IDs to datadotparl IDs", len(id_map))
+        return id_map
+
     except Exception as e:
         logger.error("Failed to download people.json: %s", e)
-        return []
+        return {}
 
 
-def parse_person(person, name_lookup):
-    """Extract social links from a Popolo person object.
+# --- Social media XML parsing ---
 
-    Returns a dict with mpId and link fields, or None if no match.
+def download_social_media():
+    """Download social-media-commons.xml and parse social media links.
+
+    Returns a dict: {parlparse_id: {twitter, facebook, bluesky, ...}}
     """
-    name = person.get("name", "")
-    if not name:
-        return None
+    logger.info("Downloading social-media-commons.xml...")
+    try:
+        r = api_get(PARLPARSE_SOCIAL_URL, timeout=60)
+        root = ET.fromstring(r.text)
 
-    mp_id = match_person(name, name_lookup)
-    if mp_id == 0:
-        return None
+        social = {}
+        for info in root.findall("personinfo"):
+            pid = info.get("id", "")
+            if not pid:
+                continue
+            social[pid] = {
+                "twitterHandle": info.get("twitter_username") or None,
+                "facebookUrl": info.get("facebook_page") or None,
+                "blueskyHandle": info.get("bluesky_handle") or None,
+            }
 
-    # Extract from identifiers (scheme-based)
-    identifiers = person.get("identifiers", [])
-    links = person.get("links", [])
+        logger.info("Parsed %d social media entries", len(social))
+        return social
 
-    twitter_handle = None
-    for ident in identifiers:
-        if ident.get("scheme") == "twitter":
-            twitter_handle = ident.get("identifier")
-            break
-
-    # Extract from links (note-based)
-    facebook_url = None
-    instagram_url = None
-    linkedin_url = None
-    wikipedia_url = None
-    personal_website_url = None
-
-    for link in links:
-        note = (link.get("note") or "").lower()
-        url = link.get("url", "")
-        if not url:
-            continue
-        if note == "twitter" and not twitter_handle:
-            # Extract handle from URL
-            twitter_handle = url.rstrip("/").split("/")[-1]
-        elif note == "facebook":
-            facebook_url = url
-        elif note == "instagram":
-            instagram_url = url
-        elif note == "linkedin":
-            linkedin_url = url
-        elif note == "wikipedia":
-            wikipedia_url = url
-        elif note in ("personal", "website", "homepage"):
-            personal_website_url = url
-
-    # Skip if no links at all
-    if not any([twitter_handle, facebook_url, instagram_url,
-                linkedin_url, wikipedia_url, personal_website_url]):
-        return None
-
-    return {
-        "mpId": mp_id,
-        "twitterHandle": twitter_handle,
-        "facebookUrl": facebook_url,
-        "instagramUrl": instagram_url,
-        "linkedinUrl": linkedin_url,
-        "wikipediaUrl": wikipedia_url,
-        "personalWebsiteUrl": personal_website_url,
-    }
+    except Exception as e:
+        logger.error("Failed to download social-media-commons.xml: %s", e)
+        return {}
 
 
-def parse_people_json(persons, name_lookup):
-    """Parse all persons and return a list of link row dicts."""
+def download_websites():
+    """Download websites.xml and parse personal website URLs.
+
+    Returns a dict: {parlparse_id: website_url}
+    """
+    logger.info("Downloading websites.xml...")
+    try:
+        r = api_get(PARLPARSE_WEBSITES_URL, timeout=60)
+        root = ET.fromstring(r.text)
+
+        websites = {}
+        for info in root.findall("personinfo"):
+            pid = info.get("id", "")
+            if not pid:
+                continue
+            url = info.get("mp_website", "").strip()
+            if url:
+                websites[pid] = url
+
+        logger.info("Parsed %d website entries", len(websites))
+        return websites
+
+    except Exception as e:
+        logger.error("Failed to download websites.xml: %s", e)
+        return {}
+
+
+# --- Merge and build rows ---
+
+def build_link_rows(id_map, social, websites):
+    """Merge social media and website data, mapping to Parliament MP IDs.
+
+    Returns a list of link row dicts.
+    """
+    # Collect all ParlParse IDs that have any data
+    all_pids = set(social.keys()) | set(websites.keys())
+
     rows = []
     matched = 0
     unmatched = 0
 
-    for person in persons:
-        result = parse_person(person, name_lookup)
-        if result:
-            rows.append(result)
-            matched += 1
-        else:
+    for pid in all_pids:
+        mp_id = id_map.get(pid)
+        if not mp_id:
             unmatched += 1
+            continue
+
+        soc = social.get(pid, {})
+        website = websites.get(pid)
+
+        twitter = soc.get("twitterHandle")
+        facebook = soc.get("facebookUrl")
+        bluesky = soc.get("blueskyHandle")
+        # Note: Bluesky handle is parsed but not stored — the mp_links table
+        # has no bluesky column. Skip entries with only Bluesky data.
+
+        if not any([twitter, facebook, website]):
+            continue
+
+        rows.append({
+            "mpId": mp_id,
+            "twitterHandle": twitter,
+            "facebookUrl": facebook,
+            "instagramUrl": None,
+            "linkedinUrl": None,
+            "wikipediaUrl": None,
+            "personalWebsiteUrl": website,
+        })
+        matched += 1
 
     logger.info("Parsed %d link rows (%d matched, %d unmatched/no links)",
                 len(rows), matched, unmatched)
@@ -246,7 +238,7 @@ def insert_mp_links(conn, rows, timestamp_millis):
 # --- Build modes ---
 
 def build_seed(output_path, schema_path, mps_db, checkpoint_db=None):
-    """Seed mode: create fresh DB, download JSON, parse, insert."""
+    """Seed mode: create fresh DB, download data, parse, insert."""
     timestamp_millis = int(time.time() * 1000)
 
     if checkpoint_db and os.path.exists(checkpoint_db):
@@ -261,9 +253,10 @@ def build_seed(output_path, schema_path, mps_db, checkpoint_db=None):
         )
         build_mp_links_table(conn)
 
-    name_lookup = build_name_lookup(mps_db)
-    persons = download_people_json()
-    rows = parse_people_json(persons, name_lookup)
+    id_map = download_people_json()
+    social = download_social_media()
+    websites = download_websites()
+    rows = build_link_rows(id_map, social, websites)
 
     if rows:
         insert_mp_links(conn, rows, timestamp_millis)
@@ -275,7 +268,7 @@ def build_seed(output_path, schema_path, mps_db, checkpoint_db=None):
 
 
 def build_delta(output_path, previous_db, schema_path, mps_db):
-    """Delta mode: copy previous DB, download latest JSON, upsert."""
+    """Delta mode: copy previous DB, download latest data, upsert."""
     timestamp_millis = int(time.time() * 1000)
 
     shutil.copy2(previous_db, output_path)
@@ -284,9 +277,10 @@ def build_delta(output_path, previous_db, schema_path, mps_db):
     conn = sqlite3.connect(output_path)
     build_mp_links_table(conn)
 
-    name_lookup = build_name_lookup(mps_db)
-    persons = download_people_json()
-    rows = parse_people_json(persons, name_lookup)
+    id_map = download_people_json()
+    social = download_social_media()
+    websites = download_websites()
+    rows = build_link_rows(id_map, social, websites)
 
     if rows:
         insert_mp_links(conn, rows, timestamp_millis)

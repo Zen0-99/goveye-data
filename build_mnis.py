@@ -34,8 +34,9 @@ from api_helper import api_get, API_DELAY, BATCH_SIZE, logger
 # --- Constants ---
 
 MNIS_BASE = "https://data.parliament.uk/membersdataplatform/services/mnis/members/query/"
-MNIS_OUTPUT_PARAMS = "FullBiog|Committees|GovernmentPosts|Honours|MaidenSpeeches"
-MNIS_BATCH_SIZE = 50  # MPs per API call
+# API limits output params to 4 per request; FullBiog includes MaidenSpeeches data
+MNIS_OUTPUT_PARAMS = "FullBiog|Committees|GovernmentPosts|Honours"
+MNIS_BATCH_SIZE = 40  # MPs per API call (API returns 400 for 50+ IDs)
 
 TABLE_NAMES = ["bio_data"]
 
@@ -59,15 +60,18 @@ def fetch_mp_ids_from_db(mps_db_path):
 # --- MNIS API ---
 
 def fetch_mnis_batch(mp_ids):
-    """Fetch MNIS XML for a batch of up to 50 MP IDs.
+    """Fetch MNIS XML for a batch of up to 40 MP IDs.
 
     The MNIS API accepts comma-separated IDs in the URL:
-      ids=4101,4102,4103/FullBiog|Committees|GovernmentPosts|Honours|MaidenSpeeches
+      id=4101,4102,4103/FullBiog|Committees|GovernmentPosts|Honours
+
+    FullBiog includes MaidenSpeeches data. The API limits output params
+    to 4 per request and batch size to ~40 IDs.
 
     Returns a list of parsed member dicts.
     """
     ids_str = ",".join(str(mid) for mid in mp_ids)
-    url = f"{MNIS_BASE}ids={ids_str}/{MNIS_OUTPUT_PARAMS}"
+    url = f"{MNIS_BASE}id={ids_str}/{MNIS_OUTPUT_PARAMS}"
 
     logger.info("Fetching MNIS data for %d MPs", len(mp_ids))
     r = api_get(url, timeout=90)
@@ -123,7 +127,8 @@ def parse_mnis_member(member_elem):
     government posts, opposition posts, honours, committees.
     Posts and honours are stored as JSON arrays.
     """
-    mp_id_str = _text(member_elem, "Member_Id")
+    # Member_Id is an attribute, not a child element
+    mp_id_str = member_elem.get("Member_Id")
     if not mp_id_str:
         return None
 
@@ -132,16 +137,16 @@ def parse_mnis_member(member_elem):
     except ValueError:
         return None
 
-    # Date of birth
-    dob = _normalize_date(_text(member_elem, "Dob_Date"))
+    # Date of birth — child element <DateOfBirth>
+    dob = _normalize_date(_text(member_elem, "DateOfBirth"))
 
-    # Place of birth
-    place_elem = member_elem.find("PlaceOfBirth")
+    # Place of birth — nested in <BasicDetails>
     town_of_birth = None
     country_of_birth = None
-    if place_elem is not None:
-        town_of_birth = _text(place_elem, "Town")
-        country_of_birth = _text(place_elem, "Country")
+    basic_elem = member_elem.find("BasicDetails")
+    if basic_elem is not None:
+        town_of_birth = _text(basic_elem, "TownOfBirth")
+        country_of_birth = _text(basic_elem, "CountryOfBirth")
 
     # Maiden speech date
     maiden_speech_date = None
@@ -149,7 +154,7 @@ def parse_mnis_member(member_elem):
     if maiden_elem is not None:
         speech = maiden_elem.find("MaidenSpeech")
         if speech is not None:
-            maiden_speech_date = _normalize_date(_text(speech, "Date"))
+            maiden_speech_date = _normalize_date(_text(speech, "SpeechDate"))
 
     # Government posts
     gov_posts = []
