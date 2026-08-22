@@ -50,6 +50,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download failed-run checkpoint (if any)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        continue-on-error: true
+        run: |
+          PREV_RUN=$(gh run list --workflow=update-interests.yml --status=failure --limit=1 --json databaseId --jq '.[0].databaseId' 2>/dev/null)
+          if [ -n "$PREV_RUN" ]; then
+            gh run download "$PREV_RUN" --name interests-db-checkpoint --dir . || echo "No checkpoint from failed run"
+            if [ -f interests.db ]; then
+              echo "Found checkpoint from failed run $PREV_RUN — will resume"
+            fi
+          fi
+        env:
+          GH_TOKEN: ${ "{" }secrets.GITHUB_TOKEN{ "}" }
       - name: Build Interests database (seed mode)
         if: steps.download_prev.outputs.has_previous != 'true'
         run: |
@@ -66,6 +79,60 @@ jobs:
         with:
           path: interests.db
           key: interests-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
+
+      - name: Upload checkpoint artifact (for failed-run resume)
+        if: steps.download_prev.outputs.has_previous != 'true' && failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: interests-db-checkpoint
+          path: interests.db
+          retention-days: 7
+
+      # --- Historical interests from mySociety (2000-2026) ---
+      # Downloads the mySociety all_time_register CSV (cached) and builds
+      # a historical interests DB for 626 current MPs + 8 former PMs.
+      # The CSV is cached to avoid re-downloading the 48MB file every run.
+
+      - name: Download mps.db for name matching
+        run: |
+          gh release download mps-latest --pattern mps.db --output mps.db || echo "WARN: mps.db not found"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore mySociety CSV cache
+        id: restore_csv_cache
+        uses: actions/cache@v4
+        with:
+          path: all_time_register.csv
+          key: mysociety-csv-${{ github.run_id }}
+          restore-keys: |
+            mysociety-csv-
+
+      - name: Build historical interests
+        run: |
+          python build_historical_interests.py \
+            --output interests_historical.db \
+            --goveye-db mps.db \
+            --csv all_time_register.csv
+
+      - name: Merge live + historical interests
+        run: |
+          python merge_interests.py \
+            --live interests.db \
+            --historical interests_historical.db \
+            --output interests_merged.db
+
+      - name: Save mySociety CSV cache
+        if: always()
+        uses: actions/cache@v4
+        with:
+          path: all_time_register.csv
+          key: mysociety-csv-${{ github.run_id }}
+
+      # Use the merged DB as the final interests.db for publishing
+      - name: Replace interests.db with merged version
+        run: |
+          cp interests_merged.db interests.db
 
       # Per-API DBs are intermediate artifacts, not opened by Room.
       # Schema validation happens on the merged goveye.db in build-seed.yml.
@@ -98,6 +165,9 @@ jobs:
             Interests database update for GovEye (weekly).
 
             - **interests.db**: Per-API SQLite database (interests table only)
+              â€” now includes historical data (2000-2026) from mySociety
+              for 626 current MPs + 8 former PMs, merged with live Parliament
+              API data
             - **patch.json**: Incremental diff patch (interests)
             - **manifest.json**: Version, SHA-256 hashes, and file sizes
 

@@ -58,10 +58,12 @@ jobs:
         if: steps.download_prev.outputs.has_previous != 'true'
         continue-on-error: true
         run: |
-          # Try to download a checkpoint from a previous failed seed run
-          gh run download --name hansard-checkpoint --dir . || echo "No checkpoint from failed run"
-          if [ -f hansard.db ]; then
-            echo "Found checkpoint from failed run — will resume"
+          PREV_RUN=$(gh run list --workflow=update-hansard.yml --status=failure --limit=1 --json databaseId --jq '.[0].databaseId' 2>/dev/null)
+          if [ -n "$PREV_RUN" ]; then
+            gh run download "$PREV_RUN" --name hansard-db-checkpoint --dir . || echo "No checkpoint from failed run"
+            if [ -f hansard.db ]; then
+              echo "Found checkpoint from failed run $PREV_RUN — will resume"
+            fi
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -87,7 +89,7 @@ jobs:
         if: steps.download_prev.outputs.has_previous != 'true' && failure()
         uses: actions/upload-artifact@v4
         with:
-          name: hansard-checkpoint
+          name: hansard-db-checkpoint
           path: hansard.db
           retention-days: 7
 

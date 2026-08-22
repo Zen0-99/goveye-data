@@ -50,6 +50,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download failed-run checkpoint (if any)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        continue-on-error: true
+        run: |
+          PREV_RUN=$(gh run list --workflow=update-bills.yml --status=failure --limit=1 --json databaseId --jq '.[0].databaseId' 2>/dev/null)
+          if [ -n "$PREV_RUN" ]; then
+            gh run download "$PREV_RUN" --name bills-db-checkpoint --dir . || echo "No checkpoint from failed run"
+            if [ -f bills.db ]; then
+              echo "Found checkpoint from failed run $PREV_RUN — will resume"
+            fi
+          fi
+        env:
+          GH_TOKEN: ${ "{" }secrets.GITHUB_TOKEN{ "}" }
       - name: Build Bills database (seed mode)
         if: steps.download_prev.outputs.has_previous != 'true'
         run: |
@@ -66,6 +79,14 @@ jobs:
         with:
           path: bills.db
           key: bills-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
+
+      - name: Upload checkpoint artifact (for failed-run resume)
+        if: steps.download_prev.outputs.has_previous != 'true' && failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bills-db-checkpoint
+          path: bills.db
+          retention-days: 7
 
       # Per-API DBs are intermediate artifacts, not opened by Room.
       # Schema validation happens on the merged goveye.db in build-seed.yml.

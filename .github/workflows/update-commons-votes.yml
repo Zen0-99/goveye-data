@@ -53,6 +53,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download failed-run checkpoint (if any)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        continue-on-error: true
+        run: |
+          PREV_RUN=$(gh run list --workflow=update-commons-votes.yml --status=failure --limit=1 --json databaseId --jq '.[0].databaseId' 2>/dev/null)
+          if [ -n "$PREV_RUN" ]; then
+            gh run download "$PREV_RUN" --name commons_votes-db-checkpoint --dir . || echo "No checkpoint from failed run"
+            if [ -f commons_votes.db ]; then
+              echo "Found checkpoint from failed run $PREV_RUN — will resume"
+            fi
+          fi
+        env:
+          GH_TOKEN: ${ "{" }secrets.GITHUB_TOKEN{ "}" }
       - name: Build Commons Votes database (seed mode)
         if: steps.download_prev.outputs.has_previous != 'true' && steps.recess_check.outputs.skip != 'true'
         run: |
@@ -69,6 +82,14 @@ jobs:
         with:
           path: commons_votes.db
           key: commons-votes-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
+
+      - name: Upload checkpoint artifact (for failed-run resume)
+        if: steps.download_prev.outputs.has_previous != 'true' && failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: commons_votes-db-checkpoint
+          path: commons_votes.db
+          retention-days: 7
 
       # Per-API DBs are intermediate artifacts, not opened by Room.
       # Schema validation happens on the merged goveye.db in build-seed.yml.
