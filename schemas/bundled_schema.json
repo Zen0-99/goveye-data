@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
   "database": {
-    "version": 12,
-    "identityHash": "093d8c8462e7e719b1e62914c04bdc09",
+    "version": 13,
+    "identityHash": "8e80759689979a7f64cb1a0847c69737",
     "entities": [
       {
         "tableName": "mps",
@@ -1436,11 +1436,206 @@
             "house"
           ]
         }
+      },
+      {
+        "tableName": "mp_synopsis",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`mpId` INTEGER NOT NULL, `synopsisText` TEXT, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`mpId`))",
+        "fields": [
+          {
+            "fieldPath": "mpId",
+            "columnName": "mpId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "synopsisText",
+            "columnName": "synopsisText",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastUpdated",
+            "columnName": "lastUpdated",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "mpId"
+          ]
+        }
+      },
+      {
+        "tableName": "mp_contacts",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`mpId` INTEGER NOT NULL, `typeId` INTEGER NOT NULL, `type` TEXT, `isPreferred` INTEGER, `isWebAddress` INTEGER, `line1` TEXT, `line2` TEXT, `line3` TEXT, `line4` TEXT, `line5` TEXT, `postcode` TEXT, `phone` TEXT, `email` TEXT, `website` TEXT, `openingHours` TEXT, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`mpId`, `typeId`))",
+        "fields": [
+          {
+            "fieldPath": "mpId",
+            "columnName": "mpId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "typeId",
+            "columnName": "typeId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isPreferred",
+            "columnName": "isPreferred",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "isWebAddress",
+            "columnName": "isWebAddress",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "line1",
+            "columnName": "line1",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "line2",
+            "columnName": "line2",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "line3",
+            "columnName": "line3",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "line4",
+            "columnName": "line4",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "line5",
+            "columnName": "line5",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "postcode",
+            "columnName": "postcode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "phone",
+            "columnName": "phone",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "email",
+            "columnName": "email",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "website",
+            "columnName": "website",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "openingHours",
+            "columnName": "openingHours",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastUpdated",
+            "columnName": "lastUpdated",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "mpId",
+            "typeId"
+          ]
+        }
+      },
+      {
+        "tableName": "mp_experience",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `mpId` INTEGER NOT NULL, `type` TEXT, `typeId` INTEGER, `title` TEXT, `organisation` TEXT, `startMonth` INTEGER, `startYear` INTEGER, `endMonth` INTEGER, `endYear` INTEGER, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mpId",
+            "columnName": "mpId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "typeId",
+            "columnName": "typeId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "organisation",
+            "columnName": "organisation",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "startMonth",
+            "columnName": "startMonth",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "startYear",
+            "columnName": "startYear",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "endMonth",
+            "columnName": "endMonth",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "endYear",
+            "columnName": "endYear",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastUpdated",
+            "columnName": "lastUpdated",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '093d8c8462e7e719b1e62914c04bdc09')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '8e80759689979a7f64cb1a0847c69737')"
     ]
   }
 }

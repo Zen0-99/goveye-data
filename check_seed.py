@@ -51,6 +51,8 @@ PER_API = [
     ("manifestos", "manifestos-manifest", "manifestos"),
     ("historical_members", "historical-members-manifest", "historical_members"),
     ("debates", "debates-manifest", "debates"),
+    ("member_details", "member-details-manifest", "member_details"),
+    ("hansard", "hansard-manifest", "hansard"),
 ]
 
 
@@ -130,6 +132,8 @@ def main():
     parser.add_argument("--manifestos-manifest", default=None)
     parser.add_argument("--historical-members-manifest", default=None)
     parser.add_argument("--debates-manifest", default=None)
+    parser.add_argument("--member-details-manifest", default=None)
+    parser.add_argument("--hansard-manifest", default=None)
     args = parser.parse_args()
 
     per_api_paths = {
@@ -147,6 +151,8 @@ def main():
         "manifestos": args.manifestos_manifest,
         "historical_members": args.historical_members_manifest,
         "debates": args.debates_manifest,
+        "member_details": args.member_details_manifest,
+        "hansard": args.hansard_manifest,
     }
 
     needs_update, changed_apis = check_seed(args.seed_manifest, per_api_paths)

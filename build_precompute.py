@@ -105,12 +105,16 @@ def compute_per_mp_metrics(conn):
         house = mp["house"]
         party_name = mp["partyName"]
 
-        # questionCount — count all hansard contributions as proxy
+        # questionCount — read from hansard_contributions summary row
+        # build_hansard.py stores one row per MP with debateSection='Summary'
+        # and the question count in debateSectionId
         cursor.execute(
-            "SELECT COUNT(*) FROM hansard_contributions WHERE memberId = ?",
+            """SELECT debateSectionId FROM hansard_contributions
+               WHERE memberId = ? AND debateSection = 'Summary'""",
             (member_id,),
         )
-        question_count = cursor.fetchone()[0]
+        row = cursor.fetchone()
+        question_count = row[0] if row else 0
 
         # speechCount — count debate speeches (non-intervention)
         cursor.execute(

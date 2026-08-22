@@ -1,0 +1,112 @@
+name: Update Hansard
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly, Monday 6am UTC
+  workflow_dispatch:      # Manual trigger for seed builds and testing
+
+permissions:
+  contents: write  # Required by softprops/action-gh-release@v3
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # 650 MPs × 0.3s delay ≈ 3-4 min
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download mps.db (needed for MP IDs)
+        run: |
+          gh release download mps-latest --pattern mps.db --output mps.db || echo "No mps.db found"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore seed checkpoint
+        id: restore_checkpoint
+        if: steps.download_prev.outputs.has_previous != 'true'
+        uses: actions/cache@v4
+        with:
+          path: hansard.db
+          key: hansard-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
+          restore-keys: |
+            hansard-seed-${{ hashFiles('schemas/bundled_schema.json') }}-
+
+      - name: Download previous DB and manifest
+        id: download_prev
+        run: |
+          gh release download hansard-latest \
+            --pattern hansard.db --output prev_hansard.db || echo "No previous DB (first run)"
+          gh release download hansard-latest \
+            --pattern manifest.json --output prev_manifest.json || echo "No previous manifest (first run)"
+          if [ -f prev_hansard.db ]; then
+            echo "has_previous=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_previous=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Hansard database (seed mode)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python build_hansard.py --output hansard.db --schema schemas/bundled_schema.json --mode seed --mps-db mps.db --checkpoint-db hansard.db
+
+      - name: Build Hansard database (delta mode)
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python build_hansard.py --output hansard.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_hansard.db --mps-db mps.db
+
+      - name: Save seed checkpoint
+        if: steps.download_prev.outputs.has_previous != 'true' && always()
+        uses: actions/cache@v4
+        with:
+          path: hansard.db
+          key: hansard-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
+
+      - name: Generate diff patch
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python diff_db.py --new hansard.db --previous prev_hansard.db --schema schemas/bundled_schema.json --output patch.json --tables hansard_contributions
+
+      - name: Generate diff patch (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python diff_db.py --new hansard.db --schema schemas/bundled_schema.json --output patch.json --tables hansard_contributions
+
+      - name: Generate manifest
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python manifest.py --db hansard.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json --previous-manifest prev_manifest.json
+
+      - name: Generate manifest (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python manifest.py --db hansard.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: hansard-latest
+          name: Hansard Latest
+          body: |
+            Hansard contribution counts (written questions) update for GovEye (weekly).
+
+            - **hansard.db**: Per-API SQLite database (hansard_contributions table with summary rows)
+            - **patch.json**: Incremental diff patch
+            - **manifest.json**: Version, SHA-256 hashes, and file sizes
+
+            See manifest.json for the current version number and file hashes.
+          files: |
+            hansard.db
+            patch.json
+            manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

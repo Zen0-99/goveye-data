@@ -59,6 +59,8 @@ PER_API = [
     ("manifestos", "manifestos-manifest"),
     ("historical_members", "historical-members-manifest"),
     ("debates", "debates-manifest"),
+    ("member_details", "member-details-manifest"),
+    ("hansard", "hansard-manifest"),
 ]
 
 
@@ -135,6 +137,8 @@ def main():
     parser.add_argument("--manifestos-manifest", default=None)
     parser.add_argument("--historical-members-manifest", default=None)
     parser.add_argument("--debates-manifest", default=None)
+    parser.add_argument("--member-details-manifest", default=None)
+    parser.add_argument("--hansard-manifest", default=None)
     parser.add_argument("--previous-seed-manifest", default=None,
                         help="Path to previous seed-manifest.json for version increment.")
     args = parser.parse_args()
@@ -154,6 +158,8 @@ def main():
         "manifestos": args.manifestos_manifest,
         "historical_members": args.historical_members_manifest,
         "debates": args.debates_manifest,
+        "member_details": args.member_details_manifest,
+        "hansard": args.hansard_manifest,
     }
 
     generate_seed_manifest(

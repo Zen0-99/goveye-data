@@ -50,6 +50,8 @@ PER_API_TABLES = {
     "manifestos_db": ["party_manifestos"],
     "historical_members_db": ["historical_members"],
     "debates_db": ["debate_speeches"],
+    "member_details_db": ["mp_synopsis", "mp_contacts", "mp_experience"],
+    "hansard_db": ["hansard_contributions"],
 }
 
 
@@ -57,7 +59,8 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
               lords_votes_db=None, bills_db=None, committees_db=None,
               recess_db=None, interests_db=None, party_stats_db=None,
               bio_data_db=None, expenses_db=None, mp_links_db=None,
-              manifestos_db=None, historical_members_db=None, debates_db=None):
+              manifestos_db=None, historical_members_db=None, debates_db=None,
+              member_details_db=None, hansard_db=None):
     """Merge per-API DBs into a single goveye.db.
 
     Args:
@@ -101,6 +104,8 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
         "manifestos_db": manifestos_db,
         "historical_members_db": historical_members_db,
         "debates_db": debates_db,
+        "member_details_db": member_details_db,
+        "hansard_db": hansard_db,
     }
 
     for arg_name, db_path in source_dbs.items():
@@ -172,6 +177,8 @@ def main():
     parser.add_argument("--manifestos-db", default=None, help="Path to manifestos.db")
     parser.add_argument("--historical-members-db", default=None, help="Path to historical_members.db")
     parser.add_argument("--debates-db", default=None, help="Path to debates.db")
+    parser.add_argument("--member-details-db", default=None, help="Path to member_details.db")
+    parser.add_argument("--hansard-db", default=None, help="Path to hansard.db")
     args = parser.parse_args()
 
     merge_dbs(
@@ -190,6 +197,8 @@ def main():
         manifestos_db=args.manifestos_db,
         historical_members_db=args.historical_members_db,
         debates_db=args.debates_db,
+        member_details_db=args.member_details_db,
+        hansard_db=args.hansard_db,
     )
 
 
