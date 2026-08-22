@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
   "database": {
-    "version": 11,
-    "identityHash": "d222bbed4abd382d70e4c6679ddf98d4",
+    "version": 12,
+    "identityHash": "093d8c8462e7e719b1e62914c04bdc09",
     "entities": [
       {
         "tableName": "mps",
@@ -1283,7 +1283,7 @@
       },
       {
         "tableName": "mp_stats",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`memberId` INTEGER NOT NULL, `house` INTEGER NOT NULL, `questionCount` INTEGER NOT NULL, `speechCount` INTEGER NOT NULL, `committeeCount` INTEGER NOT NULL, `voteParticipationRate` REAL NOT NULL, `rebellionRate` REAL NOT NULL, `rebellionCount` INTEGER NOT NULL, `totalDivisionsVoted` INTEGER NOT NULL, `activityScore` INTEGER NOT NULL, `rebellionPercentile` INTEGER NOT NULL, `participationPercentile` INTEGER NOT NULL, `questionsPercentile` INTEGER NOT NULL, `speechesPercentile` INTEGER NOT NULL, `committeesPercentile` INTEGER NOT NULL, PRIMARY KEY(`memberId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`memberId` INTEGER NOT NULL, `house` INTEGER NOT NULL, `questionCount` INTEGER NOT NULL, `speechCount` INTEGER NOT NULL, `committeeCount` INTEGER NOT NULL, `voteParticipationRate` REAL NOT NULL, `rebellionRate` REAL NOT NULL, `rebellionCount` INTEGER NOT NULL, `totalDivisionsVoted` INTEGER NOT NULL, `activityScore` REAL NOT NULL, `rebellionPercentile` INTEGER NOT NULL, `participationPercentile` INTEGER NOT NULL, `questionsPercentile` INTEGER NOT NULL, `speechesPercentile` INTEGER NOT NULL, `committeesPercentile` INTEGER NOT NULL, PRIMARY KEY(`memberId`))",
         "fields": [
           {
             "fieldPath": "memberId",
@@ -1342,7 +1342,7 @@
           {
             "fieldPath": "activityScore",
             "columnName": "activityScore",
-            "affinity": "INTEGER",
+            "affinity": "REAL",
             "notNull": true
           },
           {
@@ -1440,7 +1440,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'd222bbed4abd382d70e4c6679ddf98d4')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '093d8c8462e7e719b1e62914c04bdc09')"
     ]
   }
 }

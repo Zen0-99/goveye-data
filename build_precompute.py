@@ -30,10 +30,11 @@ logging.basicConfig(
 logger = logging.getLogger("build_precompute")
 
 # ActivityScoreCalculator weights (must match ActivityScoreCalculator.kt)
-VOTE_WEIGHT = 40
-QUESTIONS_WEIGHT = 20
-SPEECHES_WEIGHT = 20
-COMMITTEES_WEIGHT = 20
+# Score is 0.0-10.0: votes 4.0, questions 2.0, speeches 2.0, committees 2.0
+VOTE_WEIGHT = 4.0
+QUESTIONS_WEIGHT = 2.0
+SPEECHES_WEIGHT = 2.0
+COMMITTEES_WEIGHT = 2.0
 
 # Houses
 COMMONS = 1
@@ -59,7 +60,7 @@ def create_precompute_tables(conn):
             `rebellionRate` REAL NOT NULL,
             `rebellionCount` INTEGER NOT NULL,
             `totalDivisionsVoted` INTEGER NOT NULL,
-            `activityScore` INTEGER NOT NULL,
+            `activityScore` REAL NOT NULL,
             `rebellionPercentile` INTEGER NOT NULL,
             `participationPercentile` INTEGER NOT NULL,
             `questionsPercentile` INTEGER NOT NULL,
@@ -219,21 +220,22 @@ def compute_per_mp_metrics(conn):
 
 def compute_activity_score(participation_rate, question_count, speech_count,
                            committee_count, avg_questions, avg_speeches, avg_committees):
-    """Compute activity score using the same formula as ActivityScoreCalculator.kt."""
-    vote_contrib = min(int(participation_rate * VOTE_WEIGHT), VOTE_WEIGHT)
+    """Compute activity score using the same formula as ActivityScoreCalculator.kt.
+    Returns a float 0.0-10.0."""
+    vote_contrib = min(participation_rate * VOTE_WEIGHT, VOTE_WEIGHT)
     questions_contrib = _normalize(question_count, avg_questions, QUESTIONS_WEIGHT)
     speeches_contrib = _normalize(speech_count, avg_speeches, SPEECHES_WEIGHT)
     committees_contrib = _normalize(committee_count, avg_committees, COMMITTEES_WEIGHT)
     total = vote_contrib + questions_contrib + speeches_contrib + committees_contrib
-    return max(0, min(100, total))
+    return max(0.0, min(10.0, total))
 
 
 def _normalize(count, average, weight):
     """Normalize a count relative to peer average (matches ActivityScoreCalculator)."""
     if average <= 0:
-        return weight if count > 0 else 0
+        return weight if count > 0 else 0.0
     ratio = count / (average * 2.0)
-    return min(int(ratio * weight), weight)
+    return min(ratio * weight, weight)
 
 
 def compute_percentile(value, peer_values):

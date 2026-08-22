@@ -32,6 +32,14 @@ LORDS_VOTES_BASE = "https://lordsvotes-api.parliament.uk/data/"
 
 PAGE_SIZE_DIVISIONS = 25
 
+# Lords division IDs and voter memberIds are offset by this amount to
+# avoid collisions with Commons IDs. The Lords API returns division IDs
+# starting from 1, which overlap with Commons division IDs (1538-2408).
+# Lords voter memberIds also collide with Commons MP IDs. Adding 1,000,000
+# ensures no overlap: Lords division 1 becomes 1000001, Lords voter 5131
+# becomes 1005131, etc.
+LORDS_ID_OFFSET = 1_000_000
+
 TABLE_NAMES = ["divisions", "division_votes"]
 
 
@@ -91,9 +99,11 @@ def map_lords_division_to_entity(div, timestamp_millis, twfy_debate_url=None):
     """Map a Lords division to a divisions table row tuple (house=2).
 
     Lords API uses camelCase field names. Content → AYE, Not Content → NO.
+    Division ID is offset by LORDS_ID_OFFSET to avoid collisions with
+    Commons division IDs.
     """
     return (
-        div.get("divisionId", 0),
+        div.get("divisionId", 0) + LORDS_ID_OFFSET,
         div.get("title", ""),
         div.get("date", ""),
         None,  # publicationUpdated — Lords API doesn't provide this
@@ -108,10 +118,15 @@ def map_lords_division_to_entity(div, timestamp_millis, twfy_debate_url=None):
 
 
 def map_lords_voter_to_entity(voter, division_id, vote, is_teller=0):
-    """Map a Lords voter to a division_votes row tuple (camelCase fields)."""
+    """Map a Lords voter to a division_votes row tuple (camelCase fields).
+
+    Both division_id and voter memberId are offset by LORDS_ID_OFFSET.
+    The division_id passed in is already offset (from map_lords_division_to_entity).
+    The voter memberId is offset here.
+    """
     return (
         division_id,
-        voter.get("memberId") or 0,
+        (voter.get("memberId") or 0) + LORDS_ID_OFFSET,
         vote,
         voter.get("name") or "",
         voter.get("party", "") or "",
@@ -130,7 +145,8 @@ def insert_lords_division(conn, div, timestamp_millis):
     division_votes with denormalized memberName/partyName.
     """
     cursor = conn.cursor()
-    division_id = div.get("divisionId", 0)
+    raw_division_id = div.get("divisionId", 0)
+    division_id = raw_division_id + LORDS_ID_OFFSET  # offset for storage
 
     # Fetch the TWFY debate URL (scrape the TWFY division page for the GID)
     date_only = (div.get("date") or "").split("T")[0]
@@ -144,7 +160,8 @@ def insert_lords_division(conn, div, timestamp_millis):
         map_lords_division_to_entity(div, timestamp_millis, twfy_url),
     )
 
-    detail = fetch_lords_division_detail(division_id)
+    # Fetch detail using the RAW (unoffset) ID — the API doesn't know about our offset
+    detail = fetch_lords_division_detail(raw_division_id)
 
     votes = []
     for voter in detail.get("contents", []):
@@ -184,7 +201,12 @@ def get_max_division_id(conn, house):
 
 
 def fetch_lords_divisions_since(max_id, divisions_limit=None):
-    """Fetch Lords divisions with divisionId > max_id (delta mode)."""
+    """Fetch Lords divisions with divisionId > max_id (delta mode).
+
+    max_id is the stored (offset) ID from the DB. Subtract LORDS_ID_OFFSET
+    to get the raw API ID for comparison.
+    """
+    raw_max_id = max_id - LORDS_ID_OFFSET if max_id > LORDS_ID_OFFSET else 0
     divisions = []
     skip = 0
 
@@ -207,7 +229,7 @@ def fetch_lords_divisions_since(max_id, divisions_limit=None):
         new_count = 0
         for div in page:
             div_id = div.get("divisionId", 0)
-            if div_id > max_id:
+            if div_id > raw_max_id:
                 divisions.append(div)
                 new_count += 1
 
