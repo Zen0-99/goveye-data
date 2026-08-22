@@ -54,6 +54,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download failed-run checkpoint (if any)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        continue-on-error: true
+        run: |
+          # Try to download a checkpoint from a previous failed seed run
+          gh run download --name hansard-checkpoint --dir . || echo "No checkpoint from failed run"
+          if [ -f hansard.db ]; then
+            echo "Found checkpoint from failed run — will resume"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build Hansard database (seed mode)
         if: steps.download_prev.outputs.has_previous != 'true'
         run: |
@@ -70,6 +82,14 @@ jobs:
         with:
           path: hansard.db
           key: hansard-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
+
+      - name: Upload checkpoint artifact (for failed-run resume)
+        if: steps.download_prev.outputs.has_previous != 'true' && failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hansard-checkpoint
+          path: hansard.db
+          retention-days: 7
 
       - name: Generate diff patch
         if: steps.download_prev.outputs.has_previous == 'true'
