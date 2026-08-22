@@ -43,12 +43,13 @@ PER_API_TABLES = {
     "committees_db": ["committees", "mp_committee_cross_ref"],
     "recess_db": ["recess_dates", "recess_dates_meta"],
     "interests_db": ["interests"],
+    "party_stats_db": ["party_stats"],
 }
 
 
 def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
               lords_votes_db=None, bills_db=None, committees_db=None,
-              recess_db=None, interests_db=None):
+              recess_db=None, interests_db=None, party_stats_db=None):
     """Merge per-API DBs into a single goveye.db.
 
     Args:
@@ -61,6 +62,7 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
         committees_db: Path to committees.db (or None).
         recess_db: Path to recess.db (or None).
         interests_db: Path to interests.db (or None).
+        party_stats_db: Path to party_stats.db (or None).
     """
     schema = schema_module.load_schema(schema_path)
     all_table_names = schema_module.get_table_names(schema)
@@ -84,6 +86,7 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
         "committees_db": committees_db,
         "recess_db": recess_db,
         "interests_db": interests_db,
+        "party_stats_db": party_stats_db,
     }
 
     for arg_name, db_path in source_dbs.items():
@@ -148,6 +151,7 @@ def main():
     parser.add_argument("--committees-db", default=None, help="Path to committees.db")
     parser.add_argument("--recess-db", default=None, help="Path to recess.db")
     parser.add_argument("--interests-db", default=None, help="Path to interests.db")
+    parser.add_argument("--party-stats-db", default=None, help="Path to party_stats.db")
     args = parser.parse_args()
 
     merge_dbs(
@@ -159,6 +163,7 @@ def main():
         committees_db=args.committees_db,
         recess_db=args.recess_db,
         interests_db=args.interests_db,
+        party_stats_db=args.party_stats_db,
     )
 
 

@@ -52,6 +52,7 @@ PER_API = [
     ("committees", "committees-manifest"),
     ("recess", "recess-manifest"),
     ("interests", "interests-manifest"),
+    ("party_stats", "party-stats-manifest"),
 ]
 
 
@@ -121,6 +122,7 @@ def main():
     parser.add_argument("--committees-manifest", default=None)
     parser.add_argument("--recess-manifest", default=None)
     parser.add_argument("--interests-manifest", default=None)
+    parser.add_argument("--party-stats-manifest", default=None)
     parser.add_argument("--previous-seed-manifest", default=None,
                         help="Path to previous seed-manifest.json for version increment.")
     args = parser.parse_args()
@@ -133,6 +135,7 @@ def main():
         "committees": args.committees_manifest,
         "recess": args.recess_manifest,
         "interests": args.interests_manifest,
+        "party_stats": args.party_stats_manifest,
     }
 
     generate_seed_manifest(

@@ -44,6 +44,7 @@ PER_API = [
     ("committees", "committees-manifest", "committees"),
     ("recess", "recess-manifest", "recess"),
     ("interests", "interests-manifest", "interests"),
+    ("party_stats", "party-stats-manifest", "party_stats"),
 ]
 
 
@@ -116,6 +117,7 @@ def main():
     parser.add_argument("--committees-manifest", default=None)
     parser.add_argument("--recess-manifest", default=None)
     parser.add_argument("--interests-manifest", default=None)
+    parser.add_argument("--party-stats-manifest", default=None)
     args = parser.parse_args()
 
     per_api_paths = {
@@ -126,6 +128,7 @@ def main():
         "committees": args.committees_manifest,
         "recess": args.recess_manifest,
         "interests": args.interests_manifest,
+        "party_stats": args.party_stats_manifest,
     }
 
     needs_update, changed_apis = check_seed(args.seed_manifest, per_api_paths)

@@ -41,35 +41,42 @@ LORDS = 2
 
 
 def create_precompute_tables(conn):
-    """Create mp_stats and peer_averages tables (additive — no raw tables touched)."""
+    """Create mp_stats and peer_averages tables (additive — no raw tables touched).
+
+    Schema must match Room's expected schema exactly (no DEFAULT clauses,
+    PRIMARY KEY as a separate constraint) or Room will reject the DB on open
+    with "Pre-packaged database has an invalid schema".
+    """
     conn.executescript(
         """
-        CREATE TABLE IF NOT EXISTS mp_stats (
-            memberId INTEGER PRIMARY KEY,
-            house INTEGER NOT NULL,
-            questionCount INTEGER NOT NULL DEFAULT 0,
-            speechCount INTEGER NOT NULL DEFAULT 0,
-            committeeCount INTEGER NOT NULL DEFAULT 0,
-            voteParticipationRate REAL NOT NULL DEFAULT 0,
-            rebellionRate REAL NOT NULL DEFAULT 0,
-            rebellionCount INTEGER NOT NULL DEFAULT 0,
-            totalDivisionsVoted INTEGER NOT NULL DEFAULT 0,
-            activityScore INTEGER NOT NULL DEFAULT 0,
-            rebellionPercentile INTEGER NOT NULL DEFAULT 0,
-            participationPercentile INTEGER NOT NULL DEFAULT 0,
-            questionsPercentile INTEGER NOT NULL DEFAULT 0,
-            speechesPercentile INTEGER NOT NULL DEFAULT 0,
-            committeesPercentile INTEGER NOT NULL DEFAULT 0
+        CREATE TABLE IF NOT EXISTS `mp_stats` (
+            `memberId` INTEGER NOT NULL,
+            `house` INTEGER NOT NULL,
+            `questionCount` INTEGER NOT NULL,
+            `speechCount` INTEGER NOT NULL,
+            `committeeCount` INTEGER NOT NULL,
+            `voteParticipationRate` REAL NOT NULL,
+            `rebellionRate` REAL NOT NULL,
+            `rebellionCount` INTEGER NOT NULL,
+            `totalDivisionsVoted` INTEGER NOT NULL,
+            `activityScore` INTEGER NOT NULL,
+            `rebellionPercentile` INTEGER NOT NULL,
+            `participationPercentile` INTEGER NOT NULL,
+            `questionsPercentile` INTEGER NOT NULL,
+            `speechesPercentile` INTEGER NOT NULL,
+            `committeesPercentile` INTEGER NOT NULL,
+            PRIMARY KEY(`memberId`)
         );
 
-        CREATE TABLE IF NOT EXISTS peer_averages (
-            house INTEGER PRIMARY KEY,
-            avgQuestions REAL NOT NULL DEFAULT 0,
-            avgSpeeches REAL NOT NULL DEFAULT 0,
-            avgCommittees REAL NOT NULL DEFAULT 0,
-            avgParticipation REAL NOT NULL DEFAULT 0,
-            avgRebellion REAL NOT NULL DEFAULT 0,
-            mpCount INTEGER NOT NULL DEFAULT 0
+        CREATE TABLE IF NOT EXISTS `peer_averages` (
+            `house` INTEGER NOT NULL,
+            `avgQuestions` REAL NOT NULL,
+            `avgSpeeches` REAL NOT NULL,
+            `avgCommittees` REAL NOT NULL,
+            `avgParticipation` REAL NOT NULL,
+            `avgRebellion` REAL NOT NULL,
+            `mpCount` INTEGER NOT NULL,
+            PRIMARY KEY(`house`)
         );
         """
     )
