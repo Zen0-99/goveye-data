@@ -36,7 +36,7 @@ from api_helper import api_get, API_DELAY, BATCH_SIZE, logger
 MNIS_BASE = "https://data.parliament.uk/membersdataplatform/services/mnis/members/query/"
 # API limits output params to 4 per request; FullBiog includes MaidenSpeeches data
 MNIS_OUTPUT_PARAMS = "FullBiog|Committees|GovernmentPosts|Honours"
-MNIS_BATCH_SIZE = 40  # MPs per API call (API returns 400 for 50+ IDs)
+MNIS_BATCH_SIZE = 30  # MPs per API call (API has URL length limit ~285 chars)
 
 TABLE_NAMES = ["bio_data"]
 
