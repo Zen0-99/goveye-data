@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Per-API build script for IPSA expenses (Phase 11, plan 11-02).
 
-Downloads IPSA expense claims CSV from parliamentary-standards.org.uk,
-parses and buckets into high-level categories (D-09), matches MP names
-to Parliament member IDs, and builds a per-API DB (expenses.db) with
-only the expenses table + the full schema's Room identity hash.
+Downloads IPSA individual business costs CSV from theipsa.org.uk API,
+parses and buckets into high-level categories (D-09), matches MPs via
+Parliamentary ID (with name matching fallback), and builds a per-API
+DB (expenses.db) with only the expenses table + the full schema's
+Room identity hash.
 
 IPSA publishes claims every 2 months. Categories are bucketed:
 Staffing, Office, Travel, Other (D-09).
@@ -34,7 +35,9 @@ from api_helper import api_get, BATCH_SIZE, logger
 
 # --- Constants ---
 
-IPSA_DATA_URL = "https://parliamentary-standards.org.uk/DataDownloads.aspx"
+IPSA_API_BASE = "https://www.theipsa.org.uk/api/download"
+# Download the two most recent financial years to get the latest data
+IPSA_YEARS = ["25_26", "24_25"]
 TABLE_NAMES = ["expenses"]
 
 # Bucket mapping (D-09): raw IPSA categories → high-level buckets
@@ -162,75 +165,53 @@ def match_mp_name(name, lookup):
 # --- IPSA CSV download ---
 
 def download_ipsa_csv():
-    """Download the latest IPSA expense claims CSV.
+    """Download IPSA individual business costs CSV for the latest financial years.
 
-    The IPSA website uses ASP.NET postbacks. We simulate the postback
-    to trigger the CSV download for the latest publication cycle.
+    IPSA moved to a new API at theipsa.org.uk with direct CSV download:
+      /api/download?type=individualBusinessCosts&year=25_26
 
-    Returns the CSV content as a string, or None if download fails.
+    Returns the combined CSV content as a string, or None if download fails.
     """
-    logger.info("Fetching IPSA DataDownloads page for postback parameters...")
+    all_csv_parts = []
 
-    try:
-        # Step 1: GET the page to extract __VIEWSTATE and __EVENTVALIDATION
-        r = api_get(IPSA_DATA_URL, timeout=60)
-        html = r.text
+    for year in IPSA_YEARS:
+        url = f"{IPSA_API_BASE}?type=individualBusinessCosts&year={year}"
+        logger.info("Downloading IPSA CSV for year %s...", year)
 
-        # Extract hidden fields
-        viewstate = _extract_hidden_field(html, "__VIEWSTATE")
-        viewstategenerator = _extract_hidden_field(html, "__VIEWSTATEGENERATOR")
-        eventvalidation = _extract_hidden_field(html, "__EVENTVALIDATION")
+        try:
+            r = api_get(url, timeout=120)
+            if r.text and len(r.text) > 100:
+                text = r.text.lstrip('\ufeff')
+                all_csv_parts.append((year, text))
+                logger.info("Downloaded IPSA CSV for %s (%d bytes)", year, len(text))
+            else:
+                logger.warning("Empty response for IPSA year %s", year)
+        except Exception as e:
+            logger.error("Failed to download IPSA CSV for year %s: %s", year, e)
 
-        if not viewstate:
-            logger.error("Failed to extract __VIEWSTATE from IPSA page")
-            return None
-
-        # Step 2: POST to trigger the "Latest data" download
-        logger.info("Triggering IPSA CSV download via postback...")
-        post_data = {
-            "__EVENTTARGET": "ctl00$cphMainContentsArea$lnkBtnLatest",
-            "__EVENTARGUMENT": "",
-            "__VIEWSTATE": viewstate,
-            "__VIEWSTATEGENERATOR": viewstategenerator or "",
-            "__EVENTVALIDATION": eventvalidation or "",
-        }
-
-        r = requests.post(
-            IPSA_DATA_URL,
-            data=post_data,
-            timeout=120,
-            headers={"Referer": IPSA_DATA_URL},
-        )
-        r.raise_for_status()
-        r.encoding = "utf-8"
-
-        # Check if the response is CSV (starts with a header row)
-        content_type = r.headers.get("Content-Type", "")
-        if "text/csv" in content_type or "application/csv" in content_type:
-            logger.info("Downloaded IPSA CSV (%d bytes)", len(r.text))
-            return r.text
-
-        # Some servers return CSV as application/octet-stream or text/plain
-        if r.text.strip().startswith('"') or "," in r.text.split("\n")[0]:
-            logger.info("Downloaded IPSA CSV (%d bytes, content-type: %s)", len(r.text), content_type)
-            return r.text
-
-        logger.error("IPSA download did not return CSV (content-type: %s)", content_type)
-        logger.debug("First 500 chars: %s", r.text[:500])
+    if not all_csv_parts:
         return None
 
-    except Exception as e:
-        logger.error("Failed to download IPSA CSV: %s", e)
-        return None
+    if len(all_csv_parts) == 1:
+        return all_csv_parts[0][1]
+
+    # Combine CSVs: keep first header, skip subsequent headers
+    combined_lines = []
+    for i, (year, text) in enumerate(all_csv_parts):
+        lines = text.split('\n')
+        if i == 0:
+            combined_lines.extend(lines)
+        else:
+            combined_lines.extend(lines[1:])
+    return '\n'.join(combined_lines)
 
 
 def _extract_hidden_field(html, field_name):
-    """Extract a hidden input field value from HTML."""
+    """Extract a hidden input field value from HTML. (Legacy — no longer used.)"""
     pattern = f'name="{field_name}"\\s+id="{field_name}"\\s+value="([^"]*)"'
     match = re.search(pattern, html)
     if match:
         return match.group(1)
-    # Try alternate attribute order
     pattern2 = f'id="{field_name}"\\s+name="{field_name}"\\s+value="([^"]*)"'
     match2 = re.search(pattern2, html)
     if match2:
@@ -243,36 +224,40 @@ def _extract_hidden_field(html, field_name):
 def parse_ipsa_csv(csv_text, name_lookup):
     """Parse IPSA CSV text and return a list of expense row dicts.
 
+    The new IPSA API CSV includes a 'Parliamentary ID' column that maps
+    directly to Parliament member IDs, so name matching is only a fallback.
+
     Each row: {mpId, category, bucket, amountPence, claimDate, status}
     """
     if not csv_text:
         return []
 
     rows = []
-    reader = csv.DictReader(io.StringIO(csv_text))
+    text = csv_text.lstrip('\ufeff')
+    reader = csv.DictReader(io.StringIO(text))
 
-    # Log the header for debugging
     headers = reader.fieldnames or []
     logger.info("IPSA CSV headers: %s", headers)
 
-    # IPSA CSV columns (may vary — try common names):
-    # - MP name: "MP's Name" or "Name"
-    # - Category: "Category" or "Category Type"
-    # - Amount: "Amount Claimed" or "Amount" or "Amount Paid"
-    # - Date: "Claim Date" or "Date" or "Payment Date"
-    # - Status: "Status" or "Claim Status"
+    # New IPSA API columns:
+    # Parliamentary ID, Year, Date, Claim Number, Name, Constituency,
+    # Category, Cost Type, Short Description, Details, Journey Type,
+    # From, To, Travel, Nights, Mileage, Amount Claimed, Amount Paid,
+    # Amount Not Paid, Amount Repaid, Status, Reason If Not Paid,
+    # Supply Month, Supply Period
 
-    name_col = _find_column(headers, ["MP's Name", "MP Name", "Name", "Member"])
+    id_col = _find_column(headers, ["Parliamentary ID", "ParliamentaryID"])
+    name_col = _find_column(headers, ["Name", "MP's Name", "MP Name", "Member"])
     category_col = _find_column(headers, ["Category", "Category Type", "Expense Type", "Type"])
     amount_col = _find_column(headers, ["Amount Claimed", "Amount", "Amount Paid", "Total", "Value"])
-    date_col = _find_column(headers, ["Claim Date", "Date", "Payment Date", "Date of Claim"])
+    date_col = _find_column(headers, ["Date", "Claim Date", "Payment Date", "Date of Claim"])
     status_col = _find_column(headers, ["Status", "Claim Status", "Approval Status"])
 
-    if not name_col or not category_col or not amount_col:
+    if not category_col or not amount_col:
         logger.error(
             "Could not find required columns in IPSA CSV. "
-            "Name: %s, Category: %s, Amount: %s",
-            name_col, category_col, amount_col,
+            "Category: %s, Amount: %s",
+            category_col, amount_col,
         )
         return []
 
@@ -280,23 +265,35 @@ def parse_ipsa_csv(csv_text, name_lookup):
     unmatched = 0
 
     for row in reader:
-        name = row.get(name_col, "").strip()
         category = row.get(category_col, "").strip()
         amount_str = row.get(amount_col, "0").strip()
         claim_date = row.get(date_col, "").strip() if date_col else ""
         status = row.get(status_col, "").strip() if status_col else ""
 
-        # Parse amount to pence
         amount_pence = _parse_amount(amount_str)
         if amount_pence is None:
             continue
 
-        # Match MP name to Parliament member ID
-        mp_id = match_mp_name(name, name_lookup)
+        # Match MP: prefer Parliamentary ID, fall back to name matching
+        mp_id = 0
+        if id_col:
+            id_str = row.get(id_col, "").strip()
+            if id_str:
+                try:
+                    mp_id = int(id_str)
+                except ValueError:
+                    pass
+
+        if mp_id == 0 and name_col:
+            name = row.get(name_col, "").strip()
+            mp_id = match_mp_name(name, name_lookup)
+
         if mp_id == 0:
             unmatched += 1
-            if unmatched <= 10:  # Log first 10 unmatched for debugging
-                logger.warning("Could not match IPSA name: '%s'", name)
+            if unmatched <= 10:
+                name = row.get(name_col, "").strip() if name_col else "?"
+                logger.warning("Could not match IPSA row: name='%s', id='%s'",
+                               name, row.get(id_col, "") if id_col else "")
             continue
 
         matched += 1

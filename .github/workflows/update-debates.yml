@@ -6,10 +6,11 @@ on:
   # after they complete. This guarantees the votes DBs have fresh twfyDebateUrl data.
 
 # Concurrency: if both votes workflows trigger debates at nearly the same time,
-# cancel the first run and let the second one proceed (it will see both DBs updated).
+# queue them rather than cancelling — the second run will see the first run's
+# published DB and run in delta mode with fewer new debates to process.
 concurrency:
   group: debates-update
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: write  # Required by softprops/action-gh-release@v3
