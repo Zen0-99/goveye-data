@@ -132,6 +132,9 @@ API_TABLE_NAMES = {
     "party_stats": ["party_stats"],
     "historical_members": ["historical_members", "historical_members_fts4"],
     "precompute": ["mp_stats", "peer_averages"],
+    "gov_publications": ["government_publications"],
+    "written_statements": ["written_statements"],
+    "legislation": ["legislation"],
 }
 
 
