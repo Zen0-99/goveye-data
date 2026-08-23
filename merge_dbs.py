@@ -53,7 +53,7 @@ PER_API_TABLES = {
     "member_details_db": ["mp_synopsis", "mp_contacts", "mp_experience"],
     "hansard_db": ["hansard_contributions"],
     "councils_db": ["councils"],
-    "gov_publications_db": ["government_publications"],
+    "gov_publications_db": ["government_publications", "_publication_bodies"],
     "written_statements_db": ["written_statements"],
     "legislation_db": ["legislation"],
 }
@@ -149,6 +149,22 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
             if not rows:
                 logger.info("  %s: 0 rows", table_name)
                 continue
+
+            # Check if table exists in destination; create from source schema if not
+            # (handles build-time temp tables like _publication_bodies that are not
+            # in the Room schema but needed for post-merge tag matching — D-03)
+            dest_cur = conn.cursor()
+            dest_cur.execute(
+                f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}'"
+            )
+            if not dest_cur.fetchone():
+                src_cursor.execute(
+                    f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{table_name}'"
+                )
+                create_sql_row = src_cursor.fetchone()
+                if create_sql_row and create_sql_row[0]:
+                    conn.execute(create_sql_row[0])
+                    logger.info("  Created missing table %s in destination (build-time temp)", table_name)
 
             # Insert into destination (INSERT OR REPLACE to handle commons+lords
             # both writing to divisions/division_votes)
