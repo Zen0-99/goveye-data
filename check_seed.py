@@ -23,6 +23,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -33,6 +34,18 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 logger = logging.getLogger("check_seed")
+
+# Scripts tracked in seed-manifest.json's codeHashes. If any of these change,
+# the seed is rebuilt with all APIs marked as changed (forcing full precompute + tags).
+TRACKED_SCRIPTS = ["build_precompute.py", "build_tags.py"]
+
+
+def compute_file_hash(path):
+    """Compute SHA-256 of a file's content (must match generate_seed_manifest.py)."""
+    if not os.path.exists(path):
+        return None
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
 
 # Maps CLI argument names to the key used in seed-manifest.json
 # and the API name used in changed_apis output + build-seed.yml case statements.
@@ -65,7 +78,7 @@ def load_manifest(path):
 
 
 def check_seed(seed_manifest_path, per_api_manifest_paths):
-    """Compare per-API manifest hashes against the seed manifest.
+    """Compare per-API manifest hashes and code hashes against the seed manifest.
 
     Args:
         seed_manifest_path: Path to seed-manifest.json (may not exist on first run).
@@ -107,6 +120,30 @@ def check_seed(seed_manifest_path, per_api_manifest_paths):
             changed_apis.append(api_name)
         else:
             logger.info("  %s: unchanged", api_name)
+
+    # Check if any tracked scripts changed (codeHashes in seed-manifest.json).
+    # If so, force a full rebuild by marking all APIs as changed — this ensures
+    # precompute and tags run even when no data changed.
+    stored_code_hashes = seed_manifest.get("codeHashes", {})
+    code_changed = False
+    for script in TRACKED_SCRIPTS:
+        current_code_hash = compute_file_hash(script)
+        stored_code_hash = stored_code_hashes.get(script)
+        if stored_code_hash is None:
+            logger.info("  code:%s: no stored hash — changed", script)
+            code_changed = True
+        elif current_code_hash != stored_code_hash:
+            logger.info("  code:%s: hash changed (%s → %s)", script,
+                        stored_code_hash[:12] if stored_code_hash else "none",
+                        current_code_hash[:12] if current_code_hash else "none")
+            code_changed = True
+        else:
+            logger.info("  code:%s: unchanged", script)
+
+    if code_changed and not changed_apis:
+        logger.info("Code scripts changed but no data changed — forcing full rebuild")
+        all_apis = [api_name for _, _, api_name in PER_API]
+        return True, all_apis
 
     needs_update = len(changed_apis) > 0
     return needs_update, changed_apis

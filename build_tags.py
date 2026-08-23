@@ -583,7 +583,26 @@ def main():
                         help="Path to the merged goveye.db (modified in-place).")
     parser.add_argument("--schema", required=True,
                         help="Path to the Room exported schema JSON.")
+    parser.add_argument(
+        "--changed-apis", default=None,
+        help="Comma-separated list of changed per-API streams (from check_seed.py). "
+             "If provided and none of this script's dependencies are in the list, "
+             "tag building is skipped. If omitted, full rebuild runs.",
+    )
     args = parser.parse_args()
+
+    # Delta skip: if changed_apis is provided and none of our dependencies changed,
+    # the tags are unchanged — exit early.
+    # Dependencies: commons_votes (divisions), lords_votes (divisions), debates (speeches), bills
+    TAGS_DEPENDENCIES = {"commons_votes", "lords_votes", "debates", "bills"}
+    if args.changed_apis is not None:
+        changed = {a.strip() for a in args.changed_apis.split(",") if a.strip()}
+        if not changed.intersection(TAGS_DEPENDENCIES):
+            logger.info("Skipping tag build — none of %s changed (changed: %s)",
+                        sorted(TAGS_DEPENDENCIES), sorted(changed))
+            return
+        logger.info("Running tag build — changed APIs include dependencies: %s",
+                    sorted(changed.intersection(TAGS_DEPENDENCIES)))
 
     start = time.time()
 

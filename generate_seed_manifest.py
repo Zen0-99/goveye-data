@@ -31,6 +31,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -72,6 +73,20 @@ def load_manifest(path):
         return json.load(f)
 
 
+# Scripts whose code changes should trigger a seed rebuild even if no
+# per-API data changed. check_seed.py compares these hashes against the
+# stored values in seed-manifest.json.
+TRACKED_SCRIPTS = ["build_precompute.py", "build_tags.py"]
+
+
+def compute_file_hash(path):
+    """Compute SHA-256 of a file's content (UTF-8, normalized line endings)."""
+    if not os.path.exists(path):
+        return None
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
 def generate_seed_manifest(output_path, per_api_manifest_paths,
                            previous_seed_manifest_path=None):
     """Generate seed-manifest.json with per-API dbHashes.
@@ -104,11 +119,21 @@ def generate_seed_manifest(output_path, per_api_manifest_paths,
             logger.info("  %s: %s", api_key,
                         api_hashes[api_key][:12] if api_hashes[api_key] else "none")
 
+    # Compute code hashes for tracked scripts (build_precompute.py, build_tags.py).
+    # If these scripts change but no per-API data changed, check_seed.py will
+    # detect the hash difference and force a full rebuild.
+    code_hashes = {}
+    for script in TRACKED_SCRIPTS:
+        code_hashes[script] = compute_file_hash(script)
+        logger.info("  code:%s: %s", script,
+                    code_hashes[script][:12] if code_hashes[script] else "none")
+
     seed_manifest = {
         "version": version,
         "previousVersion": previous_version,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "apiHashes": api_hashes,
+        "codeHashes": code_hashes,
     }
 
     with open(output_path, "w", encoding="utf-8") as f:

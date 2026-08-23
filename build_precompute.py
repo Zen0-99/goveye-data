@@ -378,7 +378,27 @@ def main():
         "--schema", required=False,
         help="Path to the Room exported schema JSON (for reference, not used directly).",
     )
+    parser.add_argument(
+        "--changed-apis", default=None,
+        help="Comma-separated list of changed per-API streams (from check_seed.py). "
+             "If provided and none of this script's dependencies are in the list, "
+             "precompute is skipped. If omitted, full rebuild runs.",
+    )
     args = parser.parse_args()
+
+    # Delta skip: if changed_apis is provided and none of our dependencies changed,
+    # the precomputed tables are unchanged — exit early.
+    # Dependencies: mps, commons_votes, lords_votes, committees, debates, hansard
+    PRECOMPUTE_DEPENDENCIES = {"mps", "commons_votes", "lords_votes",
+                                "committees", "debates", "hansard"}
+    if args.changed_apis is not None:
+        changed = {a.strip() for a in args.changed_apis.split(",") if a.strip()}
+        if not changed.intersection(PRECOMPUTE_DEPENDENCIES):
+            logger.info("Skipping precompute — none of %s changed (changed: %s)",
+                        sorted(PRECOMPUTE_DEPENDENCIES), sorted(changed))
+            return
+        logger.info("Running precompute — changed APIs include dependencies: %s",
+                    sorted(changed.intersection(PRECOMPUTE_DEPENDENCIES)))
 
     if not os.path.exists(args.output):
         print(f"ERROR: {args.output} does not exist — run merge_dbs.py first.")
