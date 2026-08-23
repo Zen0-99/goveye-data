@@ -227,7 +227,15 @@ def parse_ipsa_csv(csv_text, name_lookup):
     The new IPSA API CSV includes a 'Parliamentary ID' column that maps
     directly to Parliament member IDs, so name matching is only a fallback.
 
-    Each row: {mpId, category, bucket, amountPence, claimDate, status}
+    Captures all descriptive fields (Phase 13): Short Description, Details,
+    Claim Number, Journey Type, From, To, Travel, Nights, Mileage, Amount Paid,
+    Amount Not Paid, Amount Repaid, Reason If Not Paid, Supply Month, Supply Period.
+
+    Each row: {mpId, category, bucket, amountPence, claimDate, status,
+               shortDescription, details, claimNumber, journeyType, journeyFrom,
+               journeyTo, travel, nights, mileage, amountPaidPence,
+               amountNotPaidPence, amountRepaidPence, reasonIfNotPaid,
+               supplyMonth, supplyPeriod}
     """
     if not csv_text:
         return []
@@ -252,6 +260,22 @@ def parse_ipsa_csv(csv_text, name_lookup):
     amount_col = _find_column(headers, ["Amount Claimed", "Amount", "Amount Paid", "Total", "Value"])
     date_col = _find_column(headers, ["Date", "Claim Date", "Payment Date", "Date of Claim"])
     status_col = _find_column(headers, ["Status", "Claim Status", "Approval Status"])
+    # Phase 13: descriptive fields
+    short_desc_col = _find_column(headers, ["Short Description", "ShortDescription"])
+    details_col = _find_column(headers, ["Details"])
+    claim_number_col = _find_column(headers, ["Claim Number", "ClaimNumber"])
+    journey_type_col = _find_column(headers, ["Journey Type", "JourneyType"])
+    from_col = _find_column(headers, ["From"])
+    to_col = _find_column(headers, ["To"])
+    travel_col = _find_column(headers, ["Travel"])
+    nights_col = _find_column(headers, ["Nights"])
+    mileage_col = _find_column(headers, ["Mileage"])
+    amount_paid_col = _find_column(headers, ["Amount Paid", "AmountPaid"])
+    amount_not_paid_col = _find_column(headers, ["Amount Not Paid", "AmountNotPaid"])
+    amount_repaid_col = _find_column(headers, ["Amount Repaid", "AmountRepaid"])
+    reason_not_paid_col = _find_column(headers, ["Reason If Not Paid", "ReasonIfNotPaid"])
+    supply_month_col = _find_column(headers, ["Supply Month", "SupplyMonth"])
+    supply_period_col = _find_column(headers, ["Supply Period", "SupplyPeriod"])
 
     if not category_col or not amount_col:
         logger.error(
@@ -299,6 +323,25 @@ def parse_ipsa_csv(csv_text, name_lookup):
         matched += 1
         bucket = get_bucket(category)
 
+        # Parse descriptive fields (Phase 13)
+        short_desc = row.get(short_desc_col, "").strip() if short_desc_col else ""
+        details = row.get(details_col, "").strip() if details_col else ""
+        claim_number = row.get(claim_number_col, "").strip() if claim_number_col else ""
+        journey_type = row.get(journey_type_col, "").strip() if journey_type_col else ""
+        journey_from = row.get(from_col, "").strip() if from_col else ""
+        journey_to = row.get(to_col, "").strip() if to_col else ""
+        travel = row.get(travel_col, "").strip() if travel_col else ""
+        nights = row.get(nights_col, "").strip() if nights_col else ""
+        mileage = row.get(mileage_col, "").strip() if mileage_col else ""
+        reason_not_paid = row.get(reason_not_paid_col, "").strip() if reason_not_paid_col else ""
+        supply_month = row.get(supply_month_col, "").strip() if supply_month_col else ""
+        supply_period = row.get(supply_period_col, "").strip() if supply_period_col else ""
+
+        # Parse payment amounts to pence
+        amount_paid_pence = _parse_amount(row.get(amount_paid_col, "0").strip()) if amount_paid_col else None
+        amount_not_paid_pence = _parse_amount(row.get(amount_not_paid_col, "0").strip()) if amount_not_paid_col else None
+        amount_repaid_pence = _parse_amount(row.get(amount_repaid_col, "0").strip()) if amount_repaid_col else None
+
         rows.append({
             "mpId": mp_id,
             "category": category,
@@ -306,6 +349,21 @@ def parse_ipsa_csv(csv_text, name_lookup):
             "amountPence": amount_pence,
             "claimDate": claim_date or None,
             "status": status or None,
+            "shortDescription": short_desc or None,
+            "details": details or None,
+            "claimNumber": claim_number or None,
+            "journeyType": journey_type or None,
+            "journeyFrom": journey_from or None,
+            "journeyTo": journey_to or None,
+            "travel": travel or None,
+            "nights": nights or None,
+            "mileage": mileage or None,
+            "amountPaidPence": amount_paid_pence,
+            "amountNotPaidPence": amount_not_paid_pence,
+            "amountRepaidPence": amount_repaid_pence,
+            "reasonIfNotPaid": reason_not_paid or None,
+            "supplyMonth": supply_month or None,
+            "supplyPeriod": supply_period or None,
         })
 
     logger.info(
@@ -357,7 +415,10 @@ def _parse_amount(amount_str):
 # --- DB operations ---
 
 def build_expenses_table(conn):
-    """Create the expenses table if it doesn't exist."""
+    """Create the expenses table if it doesn't exist.
+
+    Phase 13: includes all IPSA descriptive fields as nullable columns.
+    """
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS expenses (
@@ -368,19 +429,41 @@ def build_expenses_table(conn):
             amountPence INTEGER,
             claimDate TEXT,
             status TEXT,
-            lastUpdated INTEGER
+            lastUpdated INTEGER,
+            shortDescription TEXT,
+            details TEXT,
+            claimNumber TEXT,
+            journeyType TEXT,
+            journeyFrom TEXT,
+            journeyTo TEXT,
+            travel TEXT,
+            nights TEXT,
+            mileage TEXT,
+            amountPaidPence INTEGER,
+            amountNotPaidPence INTEGER,
+            amountRepaidPence INTEGER,
+            reasonIfNotPaid TEXT,
+            supplyMonth TEXT,
+            supplyPeriod TEXT
         )
     """)
     conn.commit()
 
 
 def insert_expenses(conn, rows, timestamp_millis):
-    """Batch insert expense rows using INSERT OR REPLACE."""
+    """Batch insert expense rows using INSERT OR REPLACE.
+
+    Phase 13: inserts all descriptive fields.
+    """
     cursor = conn.cursor()
     insert_sql = """
         INSERT OR REPLACE INTO expenses (
-            id, mpId, category, bucket, amountPence, claimDate, status, lastUpdated
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            id, mpId, category, bucket, amountPence, claimDate, status, lastUpdated,
+            shortDescription, details, claimNumber, journeyType, journeyFrom,
+            journeyTo, travel, nights, mileage, amountPaidPence,
+            amountNotPaidPence, amountRepaidPence, reasonIfNotPaid,
+            supplyMonth, supplyPeriod
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     tuples = [
@@ -393,6 +476,21 @@ def insert_expenses(conn, rows, timestamp_millis):
             row.get("claimDate"),
             row.get("status"),
             timestamp_millis,
+            row.get("shortDescription"),
+            row.get("details"),
+            row.get("claimNumber"),
+            row.get("journeyType"),
+            row.get("journeyFrom"),
+            row.get("journeyTo"),
+            row.get("travel"),
+            row.get("nights"),
+            row.get("mileage"),
+            row.get("amountPaidPence"),
+            row.get("amountNotPaidPence"),
+            row.get("amountRepaidPence"),
+            row.get("reasonIfNotPaid"),
+            row.get("supplyMonth"),
+            row.get("supplyPeriod"),
         )
         for row in rows
     ]

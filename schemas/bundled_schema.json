@@ -949,7 +949,7 @@
       },
       {
         "tableName": "expenses",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `mpId` INTEGER NOT NULL, `category` TEXT NOT NULL, `bucket` TEXT NOT NULL, `amountPence` INTEGER NOT NULL, `claimDate` TEXT, `status` TEXT, `lastUpdated` INTEGER NOT NULL)",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `mpId` INTEGER NOT NULL, `category` TEXT NOT NULL, `bucket` TEXT NOT NULL, `amountPence` INTEGER NOT NULL, `claimDate` TEXT, `status` TEXT, `lastUpdated` INTEGER NOT NULL, `shortDescription` TEXT, `details` TEXT, `claimNumber` TEXT, `journeyType` TEXT, `journeyFrom` TEXT, `journeyTo` TEXT, `travel` TEXT, `nights` TEXT, `mileage` TEXT, `amountPaidPence` INTEGER, `amountNotPaidPence` INTEGER, `amountRepaidPence` INTEGER, `reasonIfNotPaid` TEXT, `supplyMonth` TEXT, `supplyPeriod` TEXT)",
         "fields": [
           {
             "fieldPath": "id",
@@ -996,6 +996,81 @@
             "columnName": "lastUpdated",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "shortDescription",
+            "columnName": "shortDescription",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "details",
+            "columnName": "details",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "claimNumber",
+            "columnName": "claimNumber",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "journeyType",
+            "columnName": "journeyType",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "journeyFrom",
+            "columnName": "journeyFrom",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "journeyTo",
+            "columnName": "journeyTo",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "travel",
+            "columnName": "travel",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "nights",
+            "columnName": "nights",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "mileage",
+            "columnName": "mileage",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "amountPaidPence",
+            "columnName": "amountPaidPence",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "amountNotPaidPence",
+            "columnName": "amountNotPaidPence",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "amountRepaidPence",
+            "columnName": "amountRepaidPence",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "reasonIfNotPaid",
+            "columnName": "reasonIfNotPaid",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "supplyMonth",
+            "columnName": "supplyMonth",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "supplyPeriod",
+            "columnName": "supplyPeriod",
+            "affinity": "TEXT"
           }
         ],
         "primaryKey": {

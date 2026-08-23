@@ -33,7 +33,7 @@ jobs:
         run: |
           gh release download seed-latest --pattern seed-manifest.json --output seed-manifest.json || echo "No seed-manifest.json (first run)"
 
-      - name: Download all 7 per-API manifests
+      - name: Download all 16 per-API manifests
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -51,6 +51,7 @@ jobs:
           gh release download manifestos-latest --pattern manifest.json --output manifestos_manifest.json || echo "WARN: manifestos manifest not found"
           gh release download historical-members-latest --pattern manifest.json --output historical_members_manifest.json || echo "WARN: historical-members manifest not found"
           gh release download debates-latest --pattern manifest.json --output debates_manifest.json || echo "WARN: debates manifest not found"
+          gh release download member-details-latest --pattern manifest.json --output member_details_manifest.json || echo "WARN: member-details manifest not found"
           gh release download hansard-latest --pattern manifest.json --output hansard_manifest.json || echo "WARN: hansard manifest not found"
 
       - name: Check if seed needs update
