@@ -184,7 +184,38 @@ jobs:
             esac
           done
 
-      - name: Verify all 7 DBs present
+          # Download any DBs still missing from cache (cache miss recovery)
+          download_if_missing() {
+            local db_name="$1"
+            local release_tag="$2"
+            if [ ! -f "per-api-cache/$db_name" ]; then
+              echo "Downloading $db_name (not in cache)"
+              gh release download "$release_tag" --pattern "$db_name" --output "per-api-cache/$db_name" --clobber
+            else
+              echo "$db_name already in cache"
+            fi
+          }
+          download_if_missing mps.db mps-latest
+          download_if_missing commons_votes.db commons-votes-latest
+          download_if_missing lords_votes.db lords-votes-latest
+          download_if_missing bills.db bills-latest
+          download_if_missing committees.db committees-latest
+          download_if_missing recess.db recess-latest
+          download_if_missing interests.db interests-latest
+          download_if_missing party_stats.db party-stats-latest
+          download_if_missing bio_data.db bio-data-latest
+          download_if_missing expenses.db expenses-latest
+          download_if_missing mp_links.db mp-links-latest
+          download_if_missing manifestos.db manifestos-latest
+          download_if_missing historical_members.db historical-members-latest
+          download_if_missing debates.db debates-latest
+          download_if_missing member_details.db member-details-latest
+          download_if_missing hansard.db hansard-latest
+          download_if_missing gov_publications.db gov-publications-latest
+          download_if_missing written_statements.db written-statements-latest
+          download_if_missing legislation.db legislation-latest
+
+      - name: Verify all 19 DBs present
         if: steps.check.outputs.needs_update == 'true'
         run: |
           missing=0
