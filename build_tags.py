@@ -27,6 +27,8 @@ import sqlite3
 import time
 from collections import defaultdict
 
+from bs4 import BeautifulSoup
+
 from api_helper import BATCH_SIZE, logger
 
 # --- Tag dictionary ---
@@ -380,7 +382,16 @@ DIVISION_TAG_THRESHOLD = 2
 # For bills, threshold is lower because the bill title is a strong signal.
 BILL_TAG_THRESHOLD = 1
 
-TABLE_NAMES = ["division_tags", "bill_tags", "tag_metadata"]
+# For announcements, threshold is 1 — publications/statements/legislation have
+# shorter text than full debates, so a single mention is a meaningful signal.
+PUBLICATION_TAG_THRESHOLD = 1
+STATEMENT_TAG_THRESHOLD = 1
+LEGISLATION_TAG_THRESHOLD = 1
+
+TABLE_NAMES = [
+    "division_tags", "bill_tags", "tag_metadata",
+    "publication_tags", "statement_tags", "legislation_tags", "mp_tags",
+]
 
 # --- Tag descriptions (precomputed, stored in tag_metadata table) ---
 TAG_DESCRIPTIONS = {
@@ -541,8 +552,130 @@ def build_bill_tags(conn, division_tag_rows):
     return tag_rows
 
 
-def build_tag_metadata(conn, division_tag_rows, bill_tag_rows):
-    """Build tag_metadata table with description + counts per tag."""
+def build_publication_tags(conn):
+    """Build publication_tags by pattern matching on title + summary + body.
+
+    Per D-03: body text is stored in a build-time temp table
+    (_publication_bodies) that is NOT shipped. It is available at build time
+    for tag matching and dropped before publishing. We LEFT JOIN to it so
+    publications without a body row are still tagged from title + summary.
+
+    Per Pitfall 6: GOV.UK body text is Govspeak/HTML. We strip HTML with
+    BeautifulSoup before running TAG_DICTIONARY patterns to avoid matching
+    HTML tags/attributes rather than content.
+    """
+    cursor = conn.cursor()
+
+    # government_publications has no body column (D-03). Body lives in the
+    # _publication_bodies temp table (id, body). LEFT JOIN so publications
+    # without a body row still get title + summary matched.
+    cursor.execute("""
+        SELECT gp.id, gp.title, gp.summary, pb.body
+        FROM government_publications gp
+        LEFT JOIN _publication_bodies pb ON gp.id = pb.id
+    """)
+    publications = cursor.fetchall()
+    logger.info("Processing %d publications for tags", len(publications))
+
+    tag_rows = []
+    for pub_id, title, summary, body in publications:
+        # Strip HTML from body before matching (Pitfall 6)
+        clean_body = ""
+        if body:
+            clean_body = BeautifulSoup(body, "html.parser").get_text()
+        combined_text = (title or "") + " " + (summary or "") + " " + clean_body
+
+        for tag_name, patterns in TAG_DICTIONARY.items():
+            hit_count = count_pattern_hits(combined_text, patterns)
+            if hit_count >= PUBLICATION_TAG_THRESHOLD:
+                tag_rows.append((pub_id, tag_name, hit_count))
+
+    insert_sql = """INSERT OR REPLACE INTO publication_tags (publicationId, tag, hitCount)
+                    VALUES (?, ?, ?)"""
+    for i in range(0, len(tag_rows), BATCH_SIZE):
+        batch = tag_rows[i:i + BATCH_SIZE]
+        cursor.executemany(insert_sql, batch)
+    conn.commit()
+
+    pubs_with_tags = len(set(r[0] for r in tag_rows))
+    logger.info("Publication tags: %d tags across %d publications (%d have no tags)",
+                len(tag_rows), pubs_with_tags, len(publications) - pubs_with_tags)
+    return tag_rows
+
+
+def build_statement_tags(conn):
+    """Build statement_tags by pattern matching on title + text."""
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, title, text FROM written_statements")
+    statements = cursor.fetchall()
+    logger.info("Processing %d written statements for tags", len(statements))
+
+    tag_rows = []
+    for stmt_id, title, text in statements:
+        combined_text = (title or "") + " " + (text or "")
+
+        for tag_name, patterns in TAG_DICTIONARY.items():
+            hit_count = count_pattern_hits(combined_text, patterns)
+            if hit_count >= STATEMENT_TAG_THRESHOLD:
+                tag_rows.append((stmt_id, tag_name, hit_count))
+
+    insert_sql = """INSERT OR REPLACE INTO statement_tags (statementId, tag, hitCount)
+                    VALUES (?, ?, ?)"""
+    for i in range(0, len(tag_rows), BATCH_SIZE):
+        batch = tag_rows[i:i + BATCH_SIZE]
+        cursor.executemany(insert_sql, batch)
+    conn.commit()
+
+    stmts_with_tags = len(set(r[0] for r in tag_rows))
+    logger.info("Statement tags: %d tags across %d statements (%d have no tags)",
+                len(tag_rows), stmts_with_tags, len(statements) - stmts_with_tags)
+    return tag_rows
+
+
+def build_legislation_tags(conn):
+    """Build legislation_tags by pattern matching on title only.
+
+    Legislation has no body text in the DB — only the title is available.
+    """
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, title FROM legislation")
+    legislation = cursor.fetchall()
+    logger.info("Processing %d legislation items for tags", len(legislation))
+
+    tag_rows = []
+    for leg_id, title in legislation:
+        combined_text = title or ""
+
+        for tag_name, patterns in TAG_DICTIONARY.items():
+            hit_count = count_pattern_hits(combined_text, patterns)
+            if hit_count >= LEGISLATION_TAG_THRESHOLD:
+                tag_rows.append((leg_id, tag_name, hit_count))
+
+    insert_sql = """INSERT OR REPLACE INTO legislation_tags (legislationId, tag, hitCount)
+                    VALUES (?, ?, ?)"""
+    for i in range(0, len(tag_rows), BATCH_SIZE):
+        batch = tag_rows[i:i + BATCH_SIZE]
+        cursor.executemany(insert_sql, batch)
+    conn.commit()
+
+    legs_with_tags = len(set(r[0] for r in tag_rows))
+    logger.info("Legislation tags: %d tags across %d legislation items (%d have no tags)",
+                len(tag_rows), legs_with_tags, len(legislation) - legs_with_tags)
+    return tag_rows
+
+
+def build_tag_metadata(conn, division_tag_rows, bill_tag_rows,
+                       publication_tag_rows=None, statement_tag_rows=None,
+                       legislation_tag_rows=None):
+    """Build tag_metadata table with description + counts per tag.
+
+    The tag_metadata table schema (tag, description, divisionCount, billCount)
+    is fixed by the Room entity (TagMetadataEntity). Publication/statement/
+    legislation counts are computed and logged but not stored — the app can
+    COUNT them from the respective tag tables at runtime if needed.
+    """
     cursor = conn.cursor()
 
     # Count divisions and bills per tag
@@ -553,6 +686,22 @@ def build_tag_metadata(conn, division_tag_rows, bill_tag_rows):
     bill_counts = defaultdict(int)
     for bill_id, tag_name, _ in bill_tag_rows:
         bill_counts[tag_name] += 1
+
+    # Count publications/statements/legislation per tag (for logging only)
+    pub_counts = defaultdict(int)
+    if publication_tag_rows:
+        for _, tag_name, _ in publication_tag_rows:
+            pub_counts[tag_name] += 1
+
+    stmt_counts = defaultdict(int)
+    if statement_tag_rows:
+        for _, tag_name, _ in statement_tag_rows:
+            stmt_counts[tag_name] += 1
+
+    leg_counts = defaultdict(int)
+    if legislation_tag_rows:
+        for _, tag_name, _ in legislation_tag_rows:
+            leg_counts[tag_name] += 1
 
     # Build metadata rows for all tags in the dictionary
     rows = []
@@ -568,10 +717,14 @@ def build_tag_metadata(conn, division_tag_rows, bill_tag_rows):
     cursor.executemany(insert_sql, rows)
     conn.commit()
 
-    logger.info("Tag metadata: %d tags (%d with divisions, %d with bills)",
+    logger.info("Tag metadata: %d tags (%d with divisions, %d with bills, "
+                "%d with publications, %d with statements, %d with legislation)",
                 len(rows),
                 sum(1 for r in rows if r[2] > 0),
-                sum(1 for r in rows if r[3] > 0))
+                sum(1 for r in rows if r[3] > 0),
+                sum(1 for t in pub_counts if t in TAG_DICTIONARY),
+                sum(1 for t in stmt_counts if t in TAG_DICTIONARY),
+                sum(1 for t in leg_counts if t in TAG_DICTIONARY))
     return rows
 
 
@@ -593,8 +746,12 @@ def main():
 
     # Delta skip: if changed_apis is provided and none of our dependencies changed,
     # the tags are unchanged — exit early.
-    # Dependencies: commons_votes (divisions), lords_votes (divisions), debates (speeches), bills
-    TAGS_DEPENDENCIES = {"commons_votes", "lords_votes", "debates", "bills"}
+    # Dependencies: commons_votes (divisions), lords_votes (divisions), debates (speeches),
+    #   bills, gov_publications, written_statements, legislation
+    TAGS_DEPENDENCIES = {
+        "commons_votes", "lords_votes", "debates", "bills",
+        "gov_publications", "written_statements", "legislation",
+    }
     if args.changed_apis is not None:
         changed = {a.strip() for a in args.changed_apis.split(",") if a.strip()}
         if not changed.intersection(TAGS_DEPENDENCIES):
@@ -613,6 +770,12 @@ def main():
     cursor.execute("DELETE FROM division_tags")
     cursor.execute("DELETE FROM bill_tags")
     cursor.execute("DELETE FROM tag_metadata")
+    # Clear announcement tag tables (may not exist on old DBs — wrap in try/except)
+    for table in ("publication_tags", "statement_tags", "legislation_tags"):
+        try:
+            cursor.execute(f"DELETE FROM {table}")
+        except sqlite3.OperationalError:
+            pass
     conn.commit()
 
     # Build division tags
@@ -621,8 +784,29 @@ def main():
     # Build bill tags (using division tags as input)
     bill_tag_rows = build_bill_tags(conn, division_tag_rows)
 
+    # Build announcement tags (publication, statement, legislation)
+    # These tables may not exist on old DBs — wrap in try/except so the
+    # script degrades gracefully when government data is not present.
+    publication_tag_rows = []
+    statement_tag_rows = []
+    legislation_tag_rows = []
+    try:
+        publication_tag_rows = build_publication_tags(conn)
+    except sqlite3.OperationalError as e:
+        logger.warning("Skipping publication tags: %s", e)
+    try:
+        statement_tag_rows = build_statement_tags(conn)
+    except sqlite3.OperationalError as e:
+        logger.warning("Skipping statement tags: %s", e)
+    try:
+        legislation_tag_rows = build_legislation_tags(conn)
+    except sqlite3.OperationalError as e:
+        logger.warning("Skipping legislation tags: %s", e)
+
     # Build tag metadata (descriptions + counts)
-    build_tag_metadata(conn, division_tag_rows, bill_tag_rows)
+    build_tag_metadata(conn, division_tag_rows, bill_tag_rows,
+                       publication_tag_rows, statement_tag_rows,
+                       legislation_tag_rows)
 
     conn.close()
     elapsed = time.time() - start
