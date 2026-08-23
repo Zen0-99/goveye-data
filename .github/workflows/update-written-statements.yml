@@ -1,0 +1,128 @@
+name: Update Written Statements
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # 4x daily (every 6 hours)
+  workflow_dispatch:      # Manual trigger for seed builds and testing
+
+permissions:
+  contents: write  # Required by softprops/action-gh-release@v3
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45  # Written statements with detail fetches
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore seed checkpoint
+        id: restore_checkpoint
+        if: steps.download_prev.outputs.has_previous != 'true'
+        uses: actions/cache@v4
+        with:
+          path: written_statements.db
+          key: written-statements-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
+          restore-keys: |
+            written-statements-seed-${{ hashFiles('schemas/bundled_schema.json') }}-
+
+      - name: Download previous DB and manifest
+        id: download_prev
+        run: |
+          gh release download written-statements-latest \
+            --pattern written_statements.db --output prev_written_statements.db || echo "No previous DB (first run)"
+          gh release download written-statements-latest \
+            --pattern manifest.json --output prev_manifest.json || echo "No previous manifest (first run)"
+          if [ -f prev_written_statements.db ]; then
+            echo "has_previous=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_previous=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download failed-run checkpoint (if any)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        continue-on-error: true
+        run: |
+          PREV_RUN=$(gh run list --workflow=update-written-statements.yml --status=failure --limit=1 --json databaseId --jq '.[0].databaseId' 2>/dev/null)
+          if [ -n "$PREV_RUN" ]; then
+            gh run download "$PREV_RUN" --name written_statements-db-checkpoint --dir . || echo "No checkpoint from failed run"
+            if [ -f written_statements.db ]; then
+              echo "Found checkpoint from failed run $PREV_RUN — will resume"
+            fi
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Written Statements database (seed mode)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python build_written_statements.py --output written_statements.db --schema schemas/bundled_schema.json --mode seed --checkpoint-db written_statements.db
+
+      - name: Build Written Statements database (delta mode)
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python build_written_statements.py --output written_statements.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_written_statements.db
+
+      - name: Save seed checkpoint
+        if: steps.download_prev.outputs.has_previous != 'true' && always()
+        uses: actions/cache@v4
+        with:
+          path: written_statements.db
+          key: written-statements-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
+
+      - name: Upload checkpoint artifact (for failed-run resume)
+        if: steps.download_prev.outputs.has_previous != 'true' && (failure() || cancelled())
+        uses: actions/upload-artifact@v4
+        with:
+          name: written_statements-db-checkpoint
+          path: written_statements.db
+          retention-days: 7
+
+      # Per-API DBs are intermediate artifacts, not opened by Room.
+      # Schema validation happens on the merged goveye.db in build-seed.yml.
+      - name: Generate diff patch
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python diff_db.py --new written_statements.db --previous prev_written_statements.db --schema schemas/bundled_schema.json --output patch.json --tables written_statements
+
+      - name: Generate diff patch (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python diff_db.py --new written_statements.db --schema schemas/bundled_schema.json --output patch.json --tables written_statements
+
+      - name: Generate manifest
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python manifest.py --db written_statements.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json --previous-manifest prev_manifest.json
+
+      - name: Generate manifest (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python manifest.py --db written_statements.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: written-statements-latest
+          name: Written Statements Latest
+          body: |
+            Written Statements database update for GovEye (4x daily).
+
+            - **written_statements.db**: Per-API SQLite database (Parliament Written Statements)
+            - **patch.json**: Incremental diff patch (written_statements)
+            - **manifest.json**: Version, SHA-256 hashes, and file sizes
+          files: |
+            written_statements.db
+            patch.json
+            manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

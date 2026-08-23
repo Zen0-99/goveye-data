@@ -1,0 +1,128 @@
+name: Update Gov Publications
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # 4x daily (every 6 hours)
+  workflow_dispatch:      # Manual trigger for seed builds and testing
+
+permissions:
+  contents: write  # Required by softprops/action-gh-release@v3
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45  # GOV.UK publications with Content API detail fetches
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore seed checkpoint
+        id: restore_checkpoint
+        if: steps.download_prev.outputs.has_previous != 'true'
+        uses: actions/cache@v4
+        with:
+          path: gov_publications.db
+          key: gov-publications-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
+          restore-keys: |
+            gov-publications-seed-${{ hashFiles('schemas/bundled_schema.json') }}-
+
+      - name: Download previous DB and manifest
+        id: download_prev
+        run: |
+          gh release download gov-publications-latest \
+            --pattern gov_publications.db --output prev_gov_publications.db || echo "No previous DB (first run)"
+          gh release download gov-publications-latest \
+            --pattern manifest.json --output prev_manifest.json || echo "No previous manifest (first run)"
+          if [ -f prev_gov_publications.db ]; then
+            echo "has_previous=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_previous=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download failed-run checkpoint (if any)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        continue-on-error: true
+        run: |
+          PREV_RUN=$(gh run list --workflow=update-gov-publications.yml --status=failure --limit=1 --json databaseId --jq '.[0].databaseId' 2>/dev/null)
+          if [ -n "$PREV_RUN" ]; then
+            gh run download "$PREV_RUN" --name gov_publications-db-checkpoint --dir . || echo "No checkpoint from failed run"
+            if [ -f gov_publications.db ]; then
+              echo "Found checkpoint from failed run $PREV_RUN — will resume"
+            fi
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Gov Publications database (seed mode)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python build_gov_publications.py --output gov_publications.db --schema schemas/bundled_schema.json --mode seed --checkpoint-db gov_publications.db
+
+      - name: Build Gov Publications database (delta mode)
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python build_gov_publications.py --output gov_publications.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_gov_publications.db
+
+      - name: Save seed checkpoint
+        if: steps.download_prev.outputs.has_previous != 'true' && always()
+        uses: actions/cache@v4
+        with:
+          path: gov_publications.db
+          key: gov-publications-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
+
+      - name: Upload checkpoint artifact (for failed-run resume)
+        if: steps.download_prev.outputs.has_previous != 'true' && (failure() || cancelled())
+        uses: actions/upload-artifact@v4
+        with:
+          name: gov_publications-db-checkpoint
+          path: gov_publications.db
+          retention-days: 7
+
+      # Per-API DBs are intermediate artifacts, not opened by Room.
+      # Schema validation happens on the merged goveye.db in build-seed.yml.
+      - name: Generate diff patch
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python diff_db.py --new gov_publications.db --previous prev_gov_publications.db --schema schemas/bundled_schema.json --output patch.json --tables government_publications
+
+      - name: Generate diff patch (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python diff_db.py --new gov_publications.db --schema schemas/bundled_schema.json --output patch.json --tables government_publications
+
+      - name: Generate manifest
+        if: steps.download_prev.outputs.has_previous == 'true'
+        run: |
+          python manifest.py --db gov_publications.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json --previous-manifest prev_manifest.json
+
+      - name: Generate manifest (first run)
+        if: steps.download_prev.outputs.has_previous != 'true'
+        run: |
+          python manifest.py --db gov_publications.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: gov-publications-latest
+          name: Gov Publications Latest
+          body: |
+            Government Publications database update for GovEye (4x daily).
+
+            - **gov_publications.db**: Per-API SQLite database (GOV.UK publications)
+            - **patch.json**: Incremental diff patch (government_publications)
+            - **manifest.json**: Version, SHA-256 hashes, and file sizes
+          files: |
+            gov_publications.db
+            patch.json
+            manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
