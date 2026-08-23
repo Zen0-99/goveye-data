@@ -232,34 +232,19 @@ jobs:
           python build_tags.py --output goveye.db --schema schemas/bundled_schema.json --changed-apis "$CHANGED_APIS"
 
       - name: Build MP tags (post-merge, 14-02)
-        if: steps.check.outputs.needs_update == 'true'
-        continue-on-error: true
+        if: steps.check.outputs.needs_update == 'true' && success()
         run: |
-          if [ -f build_mp_tags.py ]; then
-            python build_mp_tags.py --output goveye.db --schema schemas/bundled_schema.json
-          else
-            echo "build_mp_tags.py not yet created (14-02) — skipping"
-          fi
+          python build_mp_tags.py --output goveye.db --schema schemas/bundled_schema.json
 
       - name: Build party leaders (post-merge, 14-02)
-        if: steps.check.outputs.needs_update == 'true'
-        continue-on-error: true
+        if: steps.check.outputs.needs_update == 'true' && success()
         run: |
-          if [ -f build_party_leaders.py ]; then
-            python build_party_leaders.py --output goveye.db --schema schemas/bundled_schema.json
-          else
-            echo "build_party_leaders.py not yet created (14-02) — skipping"
-          fi
+          python build_party_leaders.py --output goveye.db --schema schemas/bundled_schema.json
 
       - name: Build source recommendations (post-merge, 14-02)
-        if: steps.check.outputs.needs_update == 'true'
-        continue-on-error: true
+        if: steps.check.outputs.needs_update == 'true' && success()
         run: |
-          if [ -f build_source_recs.py ]; then
-            python build_source_recs.py --output goveye.db --schema schemas/bundled_schema.json
-          else
-            echo "build_source_recs.py not yet created (14-02) — skipping"
-          fi
+          python build_source_recs.py --output goveye.db --schema schemas/bundled_schema.json
 
       - name: Drop build-time temp tables (D-03 — body text not shipped)
         if: steps.check.outputs.needs_update == 'true'
