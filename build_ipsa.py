@@ -14,6 +14,21 @@ Modes:
   seed  — create fresh DB, download CSV, parse, insert
   delta — copy previous DB, download latest CSV, upsert
 
+When NOT to run this script:
+  This script re-downloads the IPSA CSV and re-parses expenses. If only
+  a derived column's logic changed (e.g. the bucket mapping in
+  IPSA_BUCKET_MAPPING), do NOT run this script — run the SQL UPDATE
+  directly against the existing DB instead. The Room migration in
+  GovEye's DatabaseModule.kt contains the same SQL and handles the
+  update on user devices.
+
+  Example (bucket re-mapping, same pattern as build_interests.py):
+    python -c "import sqlite3; c=sqlite3.connect('expenses.db'); \\
+    c.execute('''UPDATE expenses SET bucket = CASE ... END'''); \\
+    c.commit(); c.close()"
+
+  See goveye-data/AGENTS.md for the full decision guide.
+
 Usage:
   python build_ipsa.py --output expenses.db --schema schemas/bundled_schema.json --mode seed --mps-db mps.db
   python build_ipsa.py --output expenses.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_expenses.db --mps-db mps.db

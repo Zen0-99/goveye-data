@@ -19,6 +19,17 @@ Table produced:
   mp_tags (memberId, tag, hitCount) — hitCount is the recency-weighted
   score as an int. Composite PK: (memberId, tag).
 
+When NOT to run this script:
+  This script re-aggregates MP tags (tag, hitCount in mp_tags) from
+  written_statements, government_publications, and legislation. If
+  only the tag aggregation logic changed (e.g. the recency weighting
+  formula, the TAG_DICTIONARY patterns), do NOT run this script — run
+  the SQL UPDATE directly against the existing DB instead. The Room
+  migration in GovEye's DatabaseModule.kt contains the same SQL and
+  handles the update on user devices.
+
+  See goveye-data/AGENTS.md for the full decision guide.
+
 Usage:
   python build_mp_tags.py --output goveye.db --schema schemas/bundled_schema.json
 """

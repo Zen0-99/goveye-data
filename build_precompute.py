@@ -12,6 +12,21 @@ Produces two precomputed tables via SQL aggregation (no API calls):
 
 This eliminates 5,500+ runtime DAO calls per profile open on Android.
 
+When NOT to run this script:
+  This script recomputes MP statistics (activityScore, rebellionRate,
+  voteParticipationRate, all *Percentile columns) from division_votes,
+  debate_speeches, and committees. If only a derived column's logic
+  changed (e.g. the activityScore weights, the rebellionRate formula),
+  do NOT run this script — run the SQL UPDATE directly against the
+  existing DB instead. The Room migration in GovEye's DatabaseModule.kt
+  contains the same SQL and handles the update on user devices.
+
+  Note: this script has a --changed-apis flag that skips recomputation
+  when source APIs haven't changed. But if the FORMULA changed, even
+  --changed-apis won't help — run the SQL directly.
+
+  See goveye-data/AGENTS.md for the full decision guide.
+
 Usage:
   python build_precompute.py --output goveye.db --schema schemas/bundled_schema.json
 """

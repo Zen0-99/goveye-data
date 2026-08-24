@@ -17,6 +17,21 @@ Tables produced:
 This script runs on the MERGED goveye.db (after merge_dbs.py, before or
 after build_precompute.py). It needs: divisions, debate_speeches, bills.
 
+When NOT to run this script:
+  This script re-extracts tags (tag, hitCount in division_tags,
+  bill_tags, etc.) by pattern matching against divisions, bills, and
+  debate_speeches. If only the tag extraction algorithm changed (e.g.
+  a pattern in TAG_DICTIONARY, the THRESHOLD), do NOT run this script
+  — run the SQL UPDATE directly against the existing DB instead. The
+  Room migration in GovEye's DatabaseModule.kt contains the same SQL
+  and handles the update on user devices.
+
+  Note: this script has a --changed-apis flag that skips re-extraction
+  when source APIs haven't changed. But if the ALGORITHM changed, even
+  --changed-apis won't help — run the SQL directly.
+
+  See goveye-data/AGENTS.md for the full decision guide.
+
 Usage:
   python build_tags.py --output goveye.db --schema schemas/bundled_schema.json
 """

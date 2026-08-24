@@ -15,6 +15,21 @@ Modes:
   delta — copy previous DB, fetch all interests, upsert (interests can
           be amended/rectified — INSERT OR REPLACE)
 
+When NOT to run this script:
+  This script re-fetches ALL 650 MPs' interests from the Parliament API
+  (both seed and delta modes). If only a derived column's logic changed
+  (e.g. the bucket mapping in BUCKET_MAPPING, or the monetary parser),
+  do NOT run this script — run the SQL UPDATE directly against the
+  existing DB instead. The Room migration in GovEye's DatabaseModule.kt
+  contains the same SQL and handles the update on user devices.
+
+  Example (bucket re-mapping):
+    python -c "import sqlite3; c=sqlite3.connect('interests.db'); \\
+    c.execute('''UPDATE interests SET bucket = CASE ... END'''); \\
+    c.commit(); c.close()"
+
+  See goveye-data/AGENTS.md for the full decision guide.
+
 Usage:
   python build_interests.py --output interests.db --schema schemas/bundled_schema.json --mode seed
   python build_interests.py --output interests.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_interests.db
@@ -50,13 +65,13 @@ BUCKET_MAPPING = {
     "1.2": "Employment/Earnings",
     "2": "Financial Support",
     "3": "Gifts",
-    "4": "Gifts",
-    "5": "Gifts",
+    "4": "Overseas Visits",
+    "5": "Overseas Gifts",
     "6": "Land/Property",
     "7": "Shareholdings",
-    "8": "Other",
-    "9": "Other",
-    "10": "Other",
+    "8": "Miscellaneous",
+    "9": "Family Employed",
+    "10": "Family Lobbying",
 }
 
 
