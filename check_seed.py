@@ -66,6 +66,9 @@ PER_API = [
     ("debates", "debates-manifest", "debates"),
     ("member_details", "member-details-manifest", "member_details"),
     ("hansard", "hansard-manifest", "hansard"),
+    ("gov_publications", "gov-publications-manifest", "gov_publications"),
+    ("written_statements", "written-statements-manifest", "written_statements"),
+    ("legislation", "legislation-manifest", "legislation"),
 ]
 
 
