@@ -220,6 +220,9 @@ def map_publication_to_entity(search_item, content_details, timestamp_millis, pu
         public_updated = content_details.get("public_updated_at", "") or search_item.get("public_timestamp", "")
         base_path = content_details.get("base_path", "") or search_item.get("link", "")
         image_url = details.get("image", None)
+        # GOV.UK Content API returns image as a dict {url, alt_text, ...}
+        if isinstance(image_url, dict):
+            image_url = image_url.get("url", "")
     else:
         # Fallback to search item data only
         title = search_item.get("title", "")
