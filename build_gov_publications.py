@@ -328,6 +328,17 @@ def build_seed(output_path, schema_path, days=90, checkpoint_db=None):
         next_id = 1
 
     # _publication_bodies temp table is created by insert_publications (D-03)
+    # But if resuming from a checkpoint that has the wrong schema (publicationId
+    # instead of id), drop it so insert_publications can recreate correctly.
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='_publication_bodies'")
+    if cursor.fetchone() is not None:
+        cursor.execute("PRAGMA table_info(_publication_bodies)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if "id" not in cols:
+            logger.info("Dropping _publication_bodies (wrong schema: %s) — will recreate", cols)
+            cursor.execute("DROP TABLE _publication_bodies")
+            conn.commit()
 
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
