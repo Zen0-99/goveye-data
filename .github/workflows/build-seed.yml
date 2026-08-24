@@ -330,11 +330,14 @@ jobs:
           body: |
             Seed database for GovEye — the first-launch download source (D-04).
 
-            - **goveye.db**: Full merged SQLite database (all 16 tables, all 650 MPs
-              + 8 former PM placeholders + all historical voting data + bills +
-              committees + recess dates + Register of Members' Financial Interests
-              including historical data from 2000-2026 via mySociety)
-            - **seed-manifest.json**: Per-API dbHash tracking for incremental seed updates
+            - **goveye.db**: Full merged SQLite database (all 40 tables, all 650 MPs
+              + all historical voting data + bills + committees + recess dates +
+              Register of Members' Financial Interests including historical data
+              from 2000-2026 via mySociety + government publications + written
+              statements + legislation + MP tags + party leaders + source
+              recommendations)
+            - **seed-manifest.json**: Per-API dbHash tracking for incremental seed
+              updates (19 per-API hashes + code hashes for build scripts)
 
             Built by downloading the per-API DBs from their respective release tags
             and merging them with merge_dbs.py. Only re-merged when a per-API dbHash
