@@ -41,6 +41,18 @@ from api_helper import api_get, API_DELAY, BATCH_SIZE, logger
 
 TABLE_NAMES = ["debate_speeches"]
 
+# File to log unmatched speaker names for manual review.
+UNMATCHED_SPEAKERS_FILE = "unmatched_speakers.txt"
+
+# Manual override table for known speaker-name → member-id mismatches.
+# Keys are speaker names as they appear in TWFY debate HTML; values are
+# Parliament member IDs. Checked before any automated matching so that
+# known edge cases (e.g. Lords with title-based names that don't match
+# the Parliament API name format) are resolved correctly.
+SPEAKER_OVERRIDES = {
+    "Baroness Stedman-Scott": 4735,  # Deborah Stedman-Scott — Lords
+}
+
 
 # --- Name matching ---
 
@@ -59,6 +71,7 @@ def _strip_honorifics(name):
     "Ms Diane Abbott" → "Diane Abbott"
     "Sir Lindsay Hoyle" → "Lindsay Hoyle"
     "Rt Hon Dame Meg Hillier" → "Meg Hillier"
+    "Baroness Stedman-Scott" → "Stedman-Scott"
     """
     if not name:
         return ""
@@ -66,6 +79,46 @@ def _strip_honorifics(name):
     while words and words[0].lower().rstrip(".") in _HONORIFICS:
         words.pop(0)
     return " ".join(words)
+
+
+def _names_match(speaker_name, db_name):
+    """Check whether a TWFY speaker name and a DB name refer to the same person.
+
+    Strips honorifics from both, then compares:
+    1. Exact match (case-insensitive)
+    2. Surname + first-initial match (e.g. "Stedman-Scott" vs "Deborah Stedman-Scott")
+
+    Returns True if the names are considered a match.
+    """
+    if not speaker_name or not db_name:
+        return False
+    s = _strip_honorifics(speaker_name).lower().strip()
+    d = _strip_honorifics(db_name).lower().strip()
+    if not s or not d:
+        return False
+    if s == d:
+        return True
+    # Surname + first-initial match
+    s_parts = s.split()
+    d_parts = d.split()
+    if len(s_parts) >= 1 and len(d_parts) >= 2:
+        s_surname = s_parts[-1]
+        d_surname = d_parts[-1]
+        if s_surname == d_surname and len(s_parts) == 1:
+            # "Stedman-Scott" vs "Deborah Stedman-Scott" — surname-only match
+            return True
+        if s_surname == d_surname and s_parts[0][0] == d_parts[0][0]:
+            return True
+    return False
+
+
+def _log_unmatched_speaker(name, twfy_person_id, debate_gid):
+    """Append an unmatched speaker to the log file for manual review."""
+    try:
+        with open(UNMATCHED_SPEAKERS_FILE, "a", encoding="utf-8") as f:
+            f.write(f"{name}\t{twfy_person_id}\t{debate_gid}\n")
+    except Exception:
+        pass
 
 
 def build_name_lookup(mps_db_path):
@@ -106,11 +159,14 @@ def build_name_lookup(mps_db_path):
 
 
 def build_twfy_id_lookup(historical_members_db_path):
-    """Build a twfy_person_id → parliament_member_id lookup from the historical_members DB.
+    """Build a twfy_person_id → (parliament_member_id, display_name) lookup
+    from the historical_members DB.
 
     This is the primary matching mechanism — the debate scraper extracts
     twfy_person_id from TWFY HTML, and this lookup maps it directly to the
-    Parliament member ID without name matching.
+    Parliament member ID without name matching. The display_name is
+    returned alongside so the caller can cross-reference the TWFY speaker
+    name with the DB name to detect mismatches.
 
     Returns an empty dict if the DB is not found (falls back to name matching).
     """
@@ -121,11 +177,14 @@ def build_twfy_id_lookup(historical_members_db_path):
 
     conn = sqlite3.connect(historical_members_db_path)
     cursor = conn.cursor()
-    cursor.execute("SELECT twfyPersonId, parliamentMemberId FROM historical_members WHERE parliamentMemberId IS NOT NULL")
+    cursor.execute(
+        "SELECT twfyPersonId, parliamentMemberId, displayName FROM historical_members "
+        "WHERE parliamentMemberId IS NOT NULL"
+    )
     lookup = {}
     for row in cursor.fetchall():
-        twfy_id, parl_id = row
-        lookup[twfy_id] = parl_id
+        twfy_id, parl_id, display_name = row
+        lookup[twfy_id] = (parl_id, display_name or "")
     conn.close()
 
     logger.info("Built TWFY ID lookup: %d mappings", len(lookup))
@@ -200,15 +259,35 @@ def parse_debate_page(html, debate_gid, division_id, name_lookup, timestamp_mill
         is_intervention = 1 if parent_div else 0
 
         # Match speaker to Parliament member ID
-        # Primary: TWFY person ID → Parliament member ID (direct lookup)
-        # Fallback: name matching against current MPs
-        if twfy_id_lookup and twfy_person_id > 0:
-            member_id = twfy_id_lookup.get(twfy_person_id, 0)
-            if member_id == 0:
+        # 1. Manual override table (highest priority — known mismatches)
+        # 2. TWFY person ID → Parliament member ID (direct lookup)
+        #    — cross-reference speaker name with DB name; if they don't
+        #      match, fall through to name matching
+        # 3. Name matching against current MPs
+        member_id = 0
+        if name in SPEAKER_OVERRIDES:
+            member_id = SPEAKER_OVERRIDES[name]
+        elif twfy_id_lookup and twfy_person_id > 0:
+            entry = twfy_id_lookup.get(twfy_person_id)
+            if entry:
+                parl_id, db_name = entry
+                if _names_match(name, db_name):
+                    member_id = parl_id
+                else:
+                    # TWFY ID matched but names don't agree — try name matching
+                    member_id = match_speaker(name, name_lookup)
+                    if member_id == 0:
+                        # Name matching also failed — log for manual review
+                        _log_unmatched_speaker(name, twfy_person_id, debate_gid)
+            else:
                 # TWFY ID not in historical members — try name matching
                 member_id = match_speaker(name, name_lookup)
+                if member_id == 0:
+                    _log_unmatched_speaker(name, twfy_person_id, debate_gid)
         else:
             member_id = match_speaker(name, name_lookup)
+            if member_id == 0 and name:
+                _log_unmatched_speaker(name, twfy_person_id, debate_gid)
 
         rows.append((
             debate_gid,
