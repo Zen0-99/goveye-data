@@ -47,30 +47,49 @@ TABLE_NAMES = ["government_publications"]
 BODIES_TABLE = "_publication_bodies"
 
 
-# --- GOV.UK Search API: organisation enumeration ---
+# --- GOV.UK Organisations API: department enumeration ---
+
+GOVUK_ORGANISATIONS = "https://www.gov.uk/api/organisations"
+
 
 def fetch_organisation_slugs():
-    """Enumerate all ministerial department slugs from the GOV.UK Search API.
+    """Enumerate all current ministerial department slugs from the GOV.UK API.
 
-    Uses the aggregate_organisations parameter with count=0 to get the full
-    list of organisations without fetching any results.
+    Paginates through the /api/organisations endpoint and filters for:
+    - format == "Ministerial department"
+    - superseding_organisations is empty (i.e. not superseded/historical)
+
+    The old approach used aggregate_organisations=prefix on the Search API,
+    but that parameter now returns 422.
 
     Returns:
-        List of organisation slug strings (e.g. "hm-treasury", "department-of-health").
+        List of organisation slug strings (e.g. "hm-treasury", "home-office").
     """
-    params = {
-        "aggregate_organisations": "prefix",
-        "count": 1,  # gov.uk API rejects count=0 with 422; use 1 to get aggregates only
-    }
-    logger.info("Fetching organisation list from GOV.UK Search API")
-    r = api_get(GOVUK_SEARCH, params=params, timeout=60)
-    data = r.json()
+    logger.info("Fetching organisation list from GOV.UK Organisations API")
     slugs = []
-    for agg in data.get("aggregates", {}).get("organisations", {}).get("options", []):
-        slug = agg.get("value", {}).get("slug", "")
-        if slug:
-            slugs.append(slug)
-    logger.info("Found %d organisations", len(slugs))
+    page = 1
+    total_pages = 1
+
+    while page <= total_pages:
+        r = api_get(f"{GOVUK_ORGANISATIONS}?page={page}", timeout=60)
+        data = r.json()
+        total_pages = data.get("pages", 1)
+
+        for org in data.get("results", []):
+            if org.get("format") != "Ministerial department":
+                continue
+            # Skip superseded/historical departments
+            if org.get("superseding_organisations"):
+                continue
+            slug = org.get("details", {}).get("slug", "")
+            if slug:
+                slugs.append(slug)
+
+        page += 1
+        if page <= total_pages:
+            time.sleep(0.5)  # Be nice to the API
+
+    logger.info("Found %d current ministerial departments", len(slugs))
     return slugs
 
 

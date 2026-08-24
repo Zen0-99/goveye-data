@@ -185,12 +185,15 @@ jobs:
           done
 
           # Download any DBs still missing from cache (cache miss recovery)
+          # Tolerates missing releases (e.g. new per-API workflows that haven't
+          # succeeded yet) — the verify step will catch truly missing DBs.
           download_if_missing() {
             local db_name="$1"
             local release_tag="$2"
             if [ ! -f "per-api-cache/$db_name" ]; then
               echo "Downloading $db_name (not in cache)"
-              gh release download "$release_tag" --pattern "$db_name" --output "per-api-cache/$db_name" --clobber
+              gh release download "$release_tag" --pattern "$db_name" --output "per-api-cache/$db_name" --clobber 2>/dev/null || \
+                echo "WARN: $db_name not found in release $release_tag — per-API workflow may not have succeeded yet"
             else
               echo "$db_name already in cache"
             fi
