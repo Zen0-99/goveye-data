@@ -30,6 +30,8 @@ import time
 from collections import defaultdict
 from datetime import datetime
 
+import schema as schema_module
+
 # --- Constants ---
 
 CSV_URL = (
@@ -378,7 +380,7 @@ def download_csv(path):
     print(f"Downloaded: {path} ({os.path.getsize(path)} bytes)")
 
 
-def build_historical(output_path, goveye_db, csv_path):
+def build_historical(output_path, goveye_db, csv_path, schema_path="schemas/bundled_schema.json"):
     """Build the historical interests database."""
     # Download CSV if needed
     download_csv(csv_path)
@@ -417,6 +419,10 @@ def build_historical(output_path, goveye_db, csv_path):
     shutil.copy2(goveye_db, output_path)
     conn = sqlite3.connect(output_path)
     cur = conn.cursor()
+
+    # Ensure the interests table exists (mps.db only has the mps table)
+    schema_module.ensure_schema(conn, schema_path, ["interests"])
+
     # Clear existing interests (we'll insert only historical ones)
     cur.execute("DELETE FROM interests")
     conn.commit()
@@ -603,9 +609,10 @@ def main():
     parser.add_argument("--output", default="interests_historical.db", help="Output DB path")
     parser.add_argument("--goveye-db", default="goveye.db", help="GovEye DB path (for MP names)")
     parser.add_argument("--csv", default=CSV_PATH, help="Path to mySociety CSV (cached)")
+    parser.add_argument("--schema", default="schemas/bundled_schema.json", help="Path to Room schema JSON")
     args = parser.parse_args()
 
-    build_historical(args.output, args.goveye_db, args.csv)
+    build_historical(args.output, args.goveye_db, args.csv, args.schema)
 
 
 if __name__ == "__main__":
