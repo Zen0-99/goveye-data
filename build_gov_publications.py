@@ -327,15 +327,7 @@ def build_seed(output_path, schema_path, days=90, checkpoint_db=None):
         )
         next_id = 1
 
-    # Ensure _publication_bodies temp table exists (D-03)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS _publication_bodies (
-            publicationId INTEGER PRIMARY KEY,
-            body TEXT
-        )
-    """)
-    conn.commit()
+    # _publication_bodies temp table is created by insert_publications (D-03)
 
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
