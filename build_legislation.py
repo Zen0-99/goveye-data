@@ -80,17 +80,30 @@ def fetch_new_legislation(max_pages=20):
                 "url": "",
             }
 
-            # Extract legislation metadata from LEG_NS elements
+            # Extract legislation metadata from LEG_NS elements.
+            # The legislation.gov.uk Atom feed stores values in attributes,
+            # not element text:
+            #   <leg:DocumentMainType Value="ScottishStatutoryInstrument"/>
+            #   <leg:Year Value="2026"/>
+            #   <leg:Number Value="240"/>
+            #   <leg:CreationDate Date="2026-08-20"/>
             for elem in entry:
                 if elem.tag.startswith(LEG_NS):
                     tag_name = elem.tag.replace(LEG_NS, "")
-                    if tag_name in ("type", "date"):
-                        entry_data[tag_name] = elem.text or ""
-                    elif tag_name in ("year", "number"):
+                    if tag_name == "DocumentMainType":
+                        entry_data["type"] = elem.attrib.get("Value", "")
+                    elif tag_name == "CreationDate":
+                        entry_data["date"] = elem.attrib.get("Date", "")
+                    elif tag_name == "Year":
                         try:
-                            entry_data[tag_name] = int(elem.text) if elem.text else 0
+                            entry_data["year"] = int(elem.attrib.get("Value", "0"))
                         except (ValueError, TypeError):
-                            entry_data[tag_name] = 0
+                            entry_data["year"] = 0
+                    elif tag_name == "Number":
+                        try:
+                            entry_data["number"] = int(elem.attrib.get("Value", "0"))
+                        except (ValueError, TypeError):
+                            entry_data["number"] = 0
 
             # URL is the entry id (legislation.gov.uk URL)
             entry_data["url"] = entry_data["id"]
