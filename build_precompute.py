@@ -55,6 +55,46 @@ COMMITTEES_WEIGHT = 2.0
 COMMONS = 1
 LORDS = 2
 
+# Default tenure start when no bio_data or historical_members data is found.
+# This preserves the previous behaviour's implicit 2016 cutoff.
+DEFAULT_TENURE_START = "2016-01-01"
+
+
+def get_tenure_start(conn, member_id):
+    """Determine the MP's tenure start date for tenure-aware metric calculation.
+
+    Tries bio_data.maidenSpeechDate first (reliable proxy for when the MP
+    started attending), then falls back to the earliest historical_members
+    startDate, then returns DEFAULT_TENURE_START ("2016-01-01") if neither
+    is available.
+
+    Returns a date string in YYYY-MM-DD format (or DEFAULT_TENURE_START).
+    """
+    cursor = conn.cursor()
+
+    # Primary: maiden speech date from bio_data
+    cursor.execute(
+        "SELECT maidenSpeechDate FROM bio_data WHERE mpId = ?",
+        (member_id,),
+    )
+    row = cursor.fetchone()
+    if row and row[0]:
+        return row[0]
+
+    # Fallback: earliest membership start from historical_members
+    cursor.execute(
+        """SELECT startDate FROM historical_members
+           WHERE parliamentMemberId = ? AND startDate IS NOT NULL
+           ORDER BY startDate ASC LIMIT 1""",
+        (member_id,),
+    )
+    row = cursor.fetchone()
+    if row and row[0]:
+        return row[0]
+
+    # Default: preserve previous behaviour's implicit 2016 cutoff
+    return DEFAULT_TENURE_START
+
 
 def create_precompute_tables(conn):
     """Create mp_stats and peer_averages tables (additive — no raw tables touched).
@@ -145,21 +185,28 @@ def compute_per_mp_metrics(conn):
         )
         committee_count = cursor.fetchone()[0]
 
+        # Tenure start date — only count divisions from this date onward so
+        # new MPs (e.g. Hannah Spencer) are not penalized for divisions they
+        # couldn't vote in, and long-serving MPs get credit for full tenure.
+        tenure_start = get_tenure_start(conn, member_id)
+        logger.debug("MP %d tenure start: %s", member_id, tenure_start)
+
         # voteParticipationRate — voted divisions / total divisions in house
-        # Must filter by house: an MP should only be credited for voting in
-        # divisions that belong to their house. Without this filter, a Commons
-        # MP who voted in Lords divisions gets a rate > 100%.
+        # since the MP's tenure start. Must filter by house: an MP should only
+        # be credited for voting in divisions that belong to their house.
+        # Without this filter, a Commons MP who voted in Lords divisions gets
+        # a rate > 100%.
         cursor.execute(
             """SELECT COUNT(DISTINCT dv.divisionId)
                FROM division_votes dv
                JOIN divisions d ON dv.divisionId = d.id
-               WHERE dv.memberId = ? AND d.house = ?""",
-            (member_id, house),
+               WHERE dv.memberId = ? AND d.house = ? AND d.date >= ?""",
+            (member_id, house, tenure_start),
         )
         voted_count = cursor.fetchone()[0]
         cursor.execute(
-            "SELECT COUNT(*) FROM divisions WHERE house = ?",
-            (house,),
+            "SELECT COUNT(*) FROM divisions WHERE house = ? AND date >= ?",
+            (house, tenure_start),
         )
         total_divisions = cursor.fetchone()[0]
         participation_rate = voted_count / total_divisions if total_divisions > 0 else 0.0
@@ -170,13 +217,13 @@ def compute_per_mp_metrics(conn):
         total_divisions_voted = voted_count
 
         if party_name and voted_count > 0:
-            # Get the MP's votes (only for divisions in their house)
+            # Get the MP's votes (only for divisions in their house since tenure)
             cursor.execute(
                 """SELECT dv.divisionId, dv.vote
                    FROM division_votes dv
                    JOIN divisions d ON dv.divisionId = d.id
-                   WHERE dv.memberId = ? AND d.house = ?""",
-                (member_id, house),
+                   WHERE dv.memberId = ? AND d.house = ? AND d.date >= ?""",
+                (member_id, house, tenure_start),
             )
             mp_votes = cursor.fetchall()
 
