@@ -39,6 +39,13 @@ def merge_interests(live_db, historical_db, output_db):
     shutil.copy2(live_db, output_db)
     logger.info("Copied live DB to %s", output_db)
 
+    # Checkpoint the historical DB's WAL file to avoid "database is locked"
+    # when attaching. The build_historical_interests.py script may leave a
+    # -wal file that hasn't been checkpointed.
+    hist_conn = sqlite3.connect(historical_db)
+    hist_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    hist_conn.close()
+
     conn = sqlite3.connect(output_db)
     cursor = conn.cursor()
 
