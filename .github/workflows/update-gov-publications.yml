@@ -11,7 +11,7 @@ permissions:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 45  # GOV.UK publications with Content API detail fetches
+    timeout-minutes: 90  # GOV.UK publications seed build fetches from ~52 departments + Content API detail fetches
 
     steps:
       - uses: actions/checkout@v4
