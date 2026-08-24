@@ -6,9 +6,13 @@ build_historical_interests.py) into a single output DB.
 
 Strategy:
 - Start with the live DB (copy it as the output)
-- Insert historical interests using INSERT OR IGNORE — live data takes
-  precedence (live data is more current and authoritative)
+- Read all historical interests into memory
+- Insert using INSERT OR IGNORE — live data takes precedence
+  (live data is more current and authoritative)
 - Historical data fills in gaps for MPs/periods not covered by the live API
+
+Avoids ATTACH DATABASE (which fails with "database is locked" when the
+historical DB has an uncheckpointed WAL file on CI).
 
 Usage:
     python merge_interests.py --live interests.db --historical interests_historical.db --output interests_merged.db
@@ -19,7 +23,6 @@ import logging
 import os
 import shutil
 import sqlite3
-import time
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -39,56 +42,55 @@ def merge_interests(live_db, historical_db, output_db):
     shutil.copy2(live_db, output_db)
     logger.info("Copied live DB to %s", output_db)
 
-    # Checkpoint the historical DB's WAL file to avoid "database is locked"
-    # when attaching. The build_historical_interests.py script may leave a
-    # -wal file that hasn't been checkpointed.
+    # Read all historical interests into memory (avoids ATTACH lock issues)
     hist_conn = sqlite3.connect(historical_db)
-    hist_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    hist_conn.close()
+    hist_c = hist_conn.cursor()
+    hist_c.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='interests'"
+    )
+    if hist_c.fetchone() is None:
+        logger.warning("Historical DB has no interests table — skipping merge")
+        hist_conn.close()
+        return
 
+    hist_c.execute("SELECT COUNT(*) FROM interests")
+    hist_count = hist_c.fetchone()[0]
+    logger.info("Historical interests: %d", hist_count)
+
+    hist_c.execute("""
+        SELECT id, memberId, summary, categoryId, categoryNumber, categoryName,
+               registrationDate, publishedDate, rectified, fieldsJson, lastUpdated,
+               parsedAmountPence, currencyCode, bucket
+        FROM interests
+    """)
+    hist_rows = hist_c.fetchall()
+    hist_conn.close()
+    logger.info("Read %d historical interests into memory", len(hist_rows))
+
+    # Open the output DB and insert historical interests
     conn = sqlite3.connect(output_db)
     cursor = conn.cursor()
 
-    # Count existing (live) interests
     cursor.execute("SELECT COUNT(*) FROM interests")
     live_count = cursor.fetchone()[0]
     logger.info("Live interests: %d", live_count)
 
-    # Attach the historical DB and merge
-    conn.execute("ATTACH DATABASE ? AS hist", (historical_db,))
-
-    # Check if historical DB has interests table
-    cursor.execute(
-        "SELECT name FROM hist.sqlite_master WHERE type='table' AND name='interests'"
-    )
-    if cursor.fetchone() is None:
-        logger.warning("Historical DB has no interests table — skipping merge")
-        conn.execute("DETACH DATABASE hist")
-        conn.close()
-        return
-
-    cursor.execute("SELECT COUNT(*) FROM hist.interests")
-    hist_count = cursor.fetchone()[0]
-    logger.info("Historical interests: %d", hist_count)
-
-    # Insert historical interests that don't conflict with live data
-    # INSERT OR IGNORE skips rows where the primary key (id) already exists
     insert_sql = """
         INSERT OR IGNORE INTO interests (
             id, memberId, summary, categoryId, categoryNumber, categoryName,
             registrationDate, publishedDate, rectified, fieldsJson, lastUpdated,
             parsedAmountPence, currencyCode, bucket
-        )
-        SELECT id, memberId, summary, categoryId, categoryNumber, categoryName,
-               registrationDate, publishedDate, rectified, fieldsJson, lastUpdated,
-               parsedAmountPence, currencyCode, bucket
-        FROM hist.interests
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
-    cursor.execute(insert_sql)
-    inserted = cursor.rowcount
-    logger.info("Merged %d historical interests (INSERT OR IGNORE)", inserted)
 
-    conn.execute("DETACH DATABASE hist")
+    inserted = 0
+    for i in range(0, len(hist_rows), BATCH_SIZE):
+        batch = hist_rows[i:i + BATCH_SIZE]
+        cursor.executemany(insert_sql, batch)
+        conn.commit()
+        inserted += cursor.rowcount
+        logger.info("Merged historical: %d/%d (inserted so far: %d)",
+                     min(i + BATCH_SIZE, len(hist_rows)), len(hist_rows), inserted)
 
     # Final count
     cursor.execute("SELECT COUNT(*) FROM interests")
