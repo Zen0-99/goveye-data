@@ -68,8 +68,13 @@ HARDCODED_LEADERS = {
     7: (4840, "Leader of the Democratic Unionist Party"),
     # Plaid Cymru (22) — Liz Saville Roberts
     22: (4583, "Leader of Plaid Cymru"),
-    # Green Party (44) — Carla Denyer / Adrian Ramsay (co-leaders)
-    44: (5515, "Leader of the Green Party"),
+    # Green Party (44) — Zack Polanski is the current leader (since Sept 2025)
+    # but is NOT an MP (London Assembly Member, twfyPersonId 26031). The
+    # party_leaders table references mps.id, so we use Adrian Ramsay (5320,
+    # former co-leader and current Green MP) as the fallback until Zack
+    # Polanski becomes an MP. The previous entry (5515) did not exist in the
+    # mps table — corrected to 5320.
+    44: (5320, "Leader of the Green Party"),
     # Reform UK (1036) — Nigel Farage
     1036: (4981, "Leader of Reform UK"),
 }
