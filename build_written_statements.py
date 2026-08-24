@@ -207,6 +207,10 @@ def build_delta(output_path, previous_db, schema_path, days=90):
 
     conn = sqlite3.connect(output_path)
 
+    # Ensure schema is up-to-date (previous DB may be from an older schema version)
+    schema_module.ensure_schema(conn, schema_path, TABLE_NAMES)
+    logger.info("Schema ensured for delta build")
+
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 

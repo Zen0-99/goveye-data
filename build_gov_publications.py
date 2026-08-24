@@ -60,7 +60,7 @@ def fetch_organisation_slugs():
     """
     params = {
         "aggregate_organisations": "prefix",
-        "count": 0,
+        "count": 1,  # gov.uk API rejects count=0 with 422; use 1 to get aggregates only
     }
     logger.info("Fetching organisation list from GOV.UK Search API")
     r = api_get(GOVUK_SEARCH, params=params, timeout=60)
@@ -356,6 +356,11 @@ def build_delta(output_path, previous_db, schema_path, days=90):
     logger.info("Copied previous DB to %s", output_path)
 
     conn = sqlite3.connect(output_path)
+
+    # Ensure schema is up-to-date (previous DB may be from an older schema version)
+    schema_module.ensure_schema(conn, schema_path, TABLE_NAMES)
+    logger.info("Schema ensured for delta build")
+
     cursor = conn.cursor()
     cursor.execute("SELECT MAX(id) FROM government_publications")
     row = cursor.fetchone()

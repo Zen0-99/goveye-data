@@ -164,6 +164,9 @@ def main():
     parser.add_argument("--debates-manifest", default=None)
     parser.add_argument("--member-details-manifest", default=None)
     parser.add_argument("--hansard-manifest", default=None)
+    parser.add_argument("--gov-publications-manifest", default=None)
+    parser.add_argument("--written-statements-manifest", default=None)
+    parser.add_argument("--legislation-manifest", default=None)
     parser.add_argument("--previous-seed-manifest", default=None,
                         help="Path to previous seed-manifest.json for version increment.")
     args = parser.parse_args()
@@ -185,6 +188,9 @@ def main():
         "debates": args.debates_manifest,
         "member_details": args.member_details_manifest,
         "hansard": args.hansard_manifest,
+        "gov_publications": args.gov_publications_manifest,
+        "written_statements": args.written_statements_manifest,
+        "legislation": args.legislation_manifest,
     }
 
     generate_seed_manifest(

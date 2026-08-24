@@ -476,6 +476,10 @@ def build_delta(output_path, previous_db, schema_path, mp_limit=None):
 
     conn = sqlite3.connect(output_path)
 
+    # Ensure schema is up-to-date (previous DB may be from an older schema version)
+    schema_module.ensure_schema(conn, schema_path, TABLE_NAMES)
+    logger.info("Schema ensured for delta build")
+
     interests = fetch_all_interests(mp_limit=mp_limit)
     if interests:
         insert_interests(conn, interests, timestamp_millis)

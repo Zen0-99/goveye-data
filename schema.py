@@ -235,3 +235,104 @@ def create_database_with_tables(output_path, schema_path, table_names):
 
     conn.commit()
     return conn
+
+
+def ensure_schema(conn, schema_path, table_names):
+    """Ensure an existing DB has all tables/columns from the current schema.
+
+    Used by delta builds where the previous DB may have an older schema
+    (missing tables or columns). Creates missing tables with
+    CREATE TABLE IF NOT EXISTS, adds missing columns with ALTER TABLE,
+    and updates the room_master_table identity hash + user_version.
+
+    Args:
+        conn: sqlite3.Connection to the existing DB (open).
+        schema_path: Path to the Room exported schema JSON.
+        table_names: List of table names to ensure exist.
+    """
+    schema = load_schema(schema_path)
+    identity_hash = get_identity_hash(schema)
+    db_version = get_version(schema)
+    table_names_set = set(table_names)
+
+    cursor = conn.cursor()
+
+    # 1. Create missing tables
+    for table_name, create_sql in get_create_sql(schema):
+        if table_name in table_names_set:
+            # Check if table exists
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (table_name,),
+            )
+            if cursor.fetchone() is None:
+                cursor.execute(create_sql)
+                continue
+
+            # Table exists — check for missing columns
+            cursor.execute(f"PRAGMA table_info({table_name})")
+            existing_cols = {row[1] for row in cursor.fetchall()}
+
+            # Parse column names from the schema's createSql
+            # Room createSql format: CREATE TABLE `table_name` (`col1` TYPE, `col2` TYPE, ...)
+            # Extract column definitions between the outer parentheses
+            import re
+            col_match = re.search(r"\((.*)\)", create_sql, re.DOTALL)
+            if col_match:
+                cols_text = col_match.group(1)
+                # Split on commas that are not inside nested parens
+                for col_def in re.split(r",\s*(?![^()]*\))", cols_text):
+                    col_def = col_def.strip()
+                    # Extract column name (first token, backtick-quoted)
+                    name_match = re.match(r"[`\"]([^`\"]+)[`\"]", col_def)
+                    if name_match:
+                        col_name = name_match.group(1)
+                        if col_name not in existing_cols:
+                            # Extract type (second token)
+                            type_match = re.match(
+                                r"[`\"'][^`\"']+[`\"']\s+(\S+)", col_def
+                            )
+                            col_type = type_match.group(1) if type_match else "TEXT"
+                            # Skip constraints like PRIMARY KEY, FOREIGN KEY, UNIQUE, CHECK
+                            if col_name.upper() in (
+                                "PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "CONSTRAINT",
+                            ):
+                                continue
+                            try:
+                                cursor.execute(
+                                    f"ALTER TABLE {table_name} ADD COLUMN `{col_name}` {col_type}"
+                                )
+                            except sqlite3.OperationalError:
+                                pass  # Column may already exist or type mismatch
+
+    # 2. Create missing FTS triggers
+    for trigger_sql in get_fts_triggers(schema):
+        if any(name in trigger_sql for name in table_names_set):
+            # Extract trigger name to check if it exists
+            name_match = re.search(
+                r'CREATE\s+(?:TRIGGER|VIRTUAL TABLE)\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\']?([^`"\'+\s(]+)',
+                trigger_sql,
+                re.IGNORECASE,
+            )
+            if name_match:
+                trigger_name = name_match.group(1)
+                cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type IN ('trigger','table') AND name=?",
+                    (trigger_name,),
+                )
+                if cursor.fetchone() is None:
+                    try:
+                        cursor.execute(trigger_sql)
+                    except sqlite3.OperationalError:
+                        pass
+
+    # 3. Update room_master_table with current identity hash
+    cursor.execute(
+        "INSERT OR REPLACE INTO room_master_table (id, identity_hash) VALUES (42, ?)",
+        (identity_hash,),
+    )
+
+    # 4. Update user_version
+    cursor.execute(f"PRAGMA user_version = {db_version}")
+
+    conn.commit()
