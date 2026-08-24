@@ -184,33 +184,42 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
     if interests_db and os.path.exists(interests_db):
         src_conn = sqlite3.connect(interests_db)
         src_cursor = src_conn.cursor()
-        # Find MPs in the interests DB that don't exist in the destination
-        src_cursor.execute("SELECT id FROM mps")
-        src_mp_ids = {row[0] for row in src_cursor.fetchall()}
-        if src_mp_ids:
-            # Check which ones are missing from destination
-            placeholders = ",".join("?" * len(src_mp_ids))
-            cur = conn.cursor()
-            cur.execute(
-                f"SELECT id FROM mps WHERE id IN ({placeholders})",
-                list(src_mp_ids),
-            )
-            existing_ids = {row[0] for row in cur.fetchall()}
-            missing_ids = src_mp_ids - existing_ids
-            if missing_ids:
-                logger.info("Copying %d placeholder MP records from interests DB", len(missing_ids))
-                for mp_id in missing_ids:
-                    src_cursor.execute("SELECT * FROM mps WHERE id = ?", (mp_id,))
-                    row = src_cursor.fetchone()
-                    if row:
-                        columns = [desc[0] for desc in src_cursor.description]
-                        col_list = ", ".join(columns)
-                        placeholders = ", ".join("?" * len(columns))
-                        conn.execute(
-                            f"INSERT OR IGNORE INTO mps ({col_list}) VALUES ({placeholders})",
-                            row,
-                        )
-        src_conn.close()
+        # Find MPs in the interests DB that don't exist in the destination.
+        # The interests DB may or may not have an mps table (the CI-built one
+        # does, but bootstrapped ones from extraction may not).
+        src_cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='mps'"
+        )
+        if src_cursor.fetchone() is None:
+            logger.info("Interests DB has no mps table — skipping placeholder MP copy")
+            src_conn.close()
+        else:
+            src_cursor.execute("SELECT id FROM mps")
+            src_mp_ids = {row[0] for row in src_cursor.fetchall()}
+            if src_mp_ids:
+                # Check which ones are missing from destination
+                placeholders = ",".join("?" * len(src_mp_ids))
+                cur = conn.cursor()
+                cur.execute(
+                    f"SELECT id FROM mps WHERE id IN ({placeholders})",
+                    list(src_mp_ids),
+                )
+                existing_ids = {row[0] for row in cur.fetchall()}
+                missing_ids = src_mp_ids - existing_ids
+                if missing_ids:
+                    logger.info("Copying %d placeholder MP records from interests DB", len(missing_ids))
+                    for mp_id in missing_ids:
+                        src_cursor.execute("SELECT * FROM mps WHERE id = ?", (mp_id,))
+                        row = src_cursor.fetchone()
+                        if row:
+                            columns = [desc[0] for desc in src_cursor.description]
+                            col_list = ", ".join(columns)
+                            placeholders = ", ".join("?" * len(columns))
+                            conn.execute(
+                                f"INSERT OR IGNORE INTO mps ({col_list}) VALUES ({placeholders})",
+                                row,
+                            )
+            src_conn.close()
 
     conn.commit()
     conn.close()
