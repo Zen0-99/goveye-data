@@ -24,6 +24,7 @@ Usage:
 
 import argparse
 import json
+import re
 import shutil
 import sqlite3
 import time
@@ -55,6 +56,87 @@ PM_PHOTOS = {
 }
 
 PARLIAMENT_PHOTO_URL = "https://members-api.parliament.uk/api/Members/{}/Thumbnail"
+
+# --- Party normalization ---
+# Maps raw ParlParse party identifiers (lowercase) to
+# (proper_case_name, abbreviation, colour_hex).
+# Colour hex values mirror PARTY_NAME_TO_COLOR in PartyColor.kt.
+PARTY_NORMALIZATION = {
+    "labour": ("Labour", "Lab", "dc241f"),
+    "conservative": ("Conservative", "Con", "0087dc"),
+    "conservative party": ("Conservative", "Con", "0087dc"),
+    "liberal democrat": ("Liberal Democrat", "LD", "faa61a"),
+    "liberal democrats": ("Liberal Democrat", "LD", "faa61a"),
+    "lib dem": ("Liberal Democrat", "LD", "faa61a"),
+    "scottish national party": ("Scottish National Party", "SNP", "fdf38e"),
+    "snp": ("Scottish National Party", "SNP", "fdf38e"),
+    "plaid cymru": ("Plaid Cymru", "PC", "005b54"),
+    "green party": ("Green Party", "Green", "6ab023"),
+    "green": ("Green Party", "Green", "6ab023"),
+    "reform uk": ("Reform UK", "Reform", "12b6cf"),
+    "reform": ("Reform UK", "Reform", "12b6cf"),
+    "brexit party": ("Brexit Party", "BP", "12b6cf"),
+    "democratic unionist party": ("Democratic Unionist Party", "DUP", "d01908"),
+    "dup": ("Democratic Unionist Party", "DUP", "d01908"),
+    "sinn féin": ("Sinn Féin", "SF", "0c6b33"),
+    "sinn fein": ("Sinn Féin", "SF", "0c6b33"),
+    "social democratic and labour party": ("Social Democratic and Labour Party", "SDLP", "0c6b33"),
+    "sdlp": ("Social Democratic and Labour Party", "SDLP", "0c6b33"),
+    "alliance party": ("Alliance Party", "Alliance", "f6cb2c"),
+    "alliance": ("Alliance Party", "Alliance", "f6cb2c"),
+    "ulster unionist party": ("Ulster Unionist Party", "UUP", "0087dc"),
+    "uup": ("Ulster Unionist Party", "UUP", "0087dc"),
+    "independent": ("Independent", "Ind", "a0a0a0"),
+    "speaker": ("Speaker", "Spk", "a0a0a0"),
+    "crossbench": ("Crossbench", "CB", "a0a0a0"),
+    "crossbentch": ("Crossbench", "CB", "a0a0a0"),  # misspelling fix
+    "labour/co-operative": ("Labour/Co-operative", "Lab/Co-op", "dc241f"),
+    "labour co-op": ("Labour/Co-operative", "Lab/Co-op", "dc241f"),
+    "labour/cooperative": ("Labour/Co-operative", "Lab/Co-op", "dc241f"),
+    "uk independence party": ("UK Independence Party", "UKIP", "12b6cf"),
+    "ukip": ("UK Independence Party", "UKIP", "12b6cf"),
+    "change uk": ("Change UK", "CUK", "a0a0a0"),
+    "the independent group for change": ("Change UK", "CUK", "a0a0a0"),
+}
+
+
+def normalize_party_name(raw_party):
+    """Map a raw ParlParse party identifier to (name, abbreviation, colour_hex).
+
+    Handles on_behalf_of_id values that may be:
+    - A path like 'uk.org.publicwhip/party/labour' → extracts 'labour'
+    - A bare lowercase name like 'labour'
+    - An already-proper-case name like 'Labour'
+
+    Falls back to title-casing the raw string with a best-effort abbreviation.
+    Returns (None, None, None) if raw_party is None or empty.
+    """
+    if not raw_party:
+        return (None, None, None)
+
+    # Strip path prefix if present (e.g. 'uk.org.publicwhip/party/labour')
+    cleaned = raw_party
+    if "/" in cleaned:
+        cleaned = cleaned.rsplit("/", 1)[-1]
+
+    key = cleaned.strip().lower()
+    if key in PARTY_NORMALIZATION:
+        return PARTY_NORMALIZATION[key]
+
+    # Fallback: title-case the raw string, derive abbreviation from initials
+    name = cleaned.strip().title()
+    abbrev = "".join(w[0].upper() for w in cleaned.strip().split() if w)[:4]
+    return (name, abbrev, "a0a0a0")
+
+
+def clean_display_name(name):
+    """Strip trailing numbers from a display name.
+
+    e.g. 'Tony Cunningham 649' → 'Tony Cunningham'
+    """
+    if not name:
+        return name
+    return re.sub(r"\s+\d+$", "", name).strip()
 
 
 # --- JSON parsing ---
@@ -209,6 +291,8 @@ def parse_people_json(data):
 
         # Get party from most recent membership with on_behalf_of_id
         party = None
+        party_abbrev = None
+        party_colour = None
         constituency = None
         latest_start = ""
         for m in active_ms:
@@ -221,6 +305,16 @@ def parse_people_json(data):
                 if "/cons/" in post_id:
                     constituency = post_id.split("/cons/")[-1]
 
+        # Normalize party name, abbreviation, and colour
+        if party:
+            p_name, p_abbrev, p_colour = normalize_party_name(party)
+            party = p_name
+            party_abbrev = p_abbrev
+            party_colour = p_colour
+
+        # Clean display name (strip stray trailing numbers)
+        display_name = clean_display_name(display_name)
+
         # Get service dates (earliest start, latest end)
         start_date = min((m.get("start_date", "9999") for m in active_ms if m.get("start_date")), default="")
         end_dates = [m.get("end_date", "") for m in active_ms if m.get("end_date") and m.get("end_date") != "9999-12-31"]
@@ -232,6 +326,8 @@ def parse_people_json(data):
             "displayName": display_name,
             "alternateNames": json.dumps(alt_names) if alt_names else None,
             "party": party,
+            "partyAbbreviation": party_abbrev,
+            "partyColourHex": party_colour,
             "house": house,
             "startDate": start_date if start_date != "9999" else None,
             "endDate": end_date,
@@ -281,6 +377,8 @@ def build_historical_members_table(conn):
             displayName TEXT NOT NULL,
             alternateNames TEXT,
             party TEXT,
+            partyAbbreviation TEXT,
+            partyColourHex TEXT,
             house INTEGER NOT NULL,
             startDate TEXT,
             endDate TEXT,
@@ -294,12 +392,18 @@ def build_historical_members_table(conn):
         CREATE VIRTUAL TABLE IF NOT EXISTS historical_members_fts4
         USING fts4(displayName, alternateNames, content=`historical_members`)
     """)
-    # Migrate: add photo column if missing (delta mode copies old schema)
+    # Migrate: add columns if missing (delta mode copies old schema)
     cursor.execute("PRAGMA table_info(historical_members)")
     columns = {row[1] for row in cursor.fetchall()}
     if "photo" not in columns:
         cursor.execute("ALTER TABLE historical_members ADD COLUMN photo BLOB")
         logger.info("Migrated historical_members: added photo column")
+    if "partyAbbreviation" not in columns:
+        cursor.execute("ALTER TABLE historical_members ADD COLUMN partyAbbreviation TEXT")
+        logger.info("Migrated historical_members: added partyAbbreviation column")
+    if "partyColourHex" not in columns:
+        cursor.execute("ALTER TABLE historical_members ADD COLUMN partyColourHex TEXT")
+        logger.info("Migrated historical_members: added partyColourHex column")
     conn.commit()
 
 
@@ -312,8 +416,9 @@ def insert_historical_members(conn, rows, timestamp_millis, pm_photos=None):
     insert_sql = """
         INSERT OR REPLACE INTO historical_members (
             twfyPersonId, parliamentMemberId, displayName, alternateNames,
-            party, house, startDate, endDate, constituency, isCurrent, photo, lastUpdated
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            party, partyAbbreviation, partyColourHex, house, startDate, endDate,
+            constituency, isCurrent, photo, lastUpdated
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     # Fix Tony Blair's parliamentMemberId (not in ParlParse, hardcoded in PM_PHOTOS)
@@ -328,6 +433,8 @@ def insert_historical_members(conn, rows, timestamp_millis, pm_photos=None):
             row["displayName"],
             row.get("alternateNames"),
             row.get("party"),
+            row.get("partyAbbreviation"),
+            row.get("partyColourHex"),
             row["house"],
             row.get("startDate"),
             row.get("endDate"),
