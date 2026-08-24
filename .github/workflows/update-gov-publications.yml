@@ -11,7 +11,7 @@ permissions:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 90  # GOV.UK publications seed build fetches from ~52 departments + Content API detail fetches
+    timeout-minutes: 58  # GitHub free tier limit is 60 min — leave 2 min buffer for cleanup
 
     steps:
       - uses: actions/checkout@v4

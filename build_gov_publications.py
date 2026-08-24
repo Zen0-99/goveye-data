@@ -305,6 +305,10 @@ def build_seed(output_path, schema_path, days=90, checkpoint_db=None):
 
     Per D-03: body text is fetched and stored in _publication_bodies temp table
     for build_tags.py (14-02) to use. The shipped DB must NOT contain body text.
+
+    Checkpoint/resume: inserts per-organisation and commits after each org,
+    so a timeout mid-fetch preserves already-processed data. On resume,
+    skips organisations that already have publications in the DB.
     """
     timestamp_millis = int(time.time() * 1000)
 
@@ -323,15 +327,47 @@ def build_seed(output_path, schema_path, days=90, checkpoint_db=None):
         )
         next_id = 1
 
+    # Ensure _publication_bodies temp table exists (D-03)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS _publication_bodies (
+            publicationId INTEGER PRIMARY KEY,
+            body TEXT
+        )
+    """)
+    conn.commit()
+
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
     org_slugs = fetch_organisation_slugs()
-    all_publications = []
-    all_bodies = {}
+
+    # On resume, find which organisations already have publications.
+    # The organisationSlug column stores the primary org slug per publication.
+    cursor.execute("SELECT COUNT(*) FROM government_publications")
+    existing_count = cursor.fetchone()[0]
+
+    # Build a set of already-processed org slugs from the checkpoint
+    processed_orgs = set()
+    if existing_count > 0:
+        cursor.execute("SELECT DISTINCT organisationSlug FROM government_publications WHERE organisationSlug != ''")
+        for (slug,) in cursor.fetchall():
+            if slug:
+                processed_orgs.add(slug)
+        logger.info("Checkpoint has %d publications from %d organisations — will skip those",
+                    existing_count, len(processed_orgs))
+
+    total_inserted = 0
 
     for org_slug in org_slugs:
+        if org_slug in processed_orgs:
+            logger.info("Skipping %s (already in checkpoint)", org_slug)
+            continue
+
         search_results = fetch_publications_for_org(org_slug, start_date, end_date)
+        org_publications = []
+        org_bodies = {}
+
         for item in search_results:
             path = item.get("link", "")
             if not path:
@@ -351,20 +387,26 @@ def build_seed(output_path, schema_path, days=90, checkpoint_db=None):
             stripped_body = strip_html_for_tag_matching(raw_body)
 
             entity = map_publication_to_entity(item, content_details, timestamp_millis, next_id)
-            all_publications.append(entity)
+            org_publications.append(entity)
             if stripped_body:
-                all_bodies[next_id] = stripped_body
+                org_bodies[next_id] = stripped_body
             next_id += 1
             time.sleep(API_DELAY)
 
-    if all_publications:
-        insert_publications(conn, all_publications, all_bodies, timestamp_millis)
+        # Insert and commit per-organisation so checkpoint preserves progress
+        if org_publications:
+            insert_publications(conn, org_publications, org_bodies, timestamp_millis)
+            conn.commit()
+            total_inserted += len(org_publications)
+            logger.info("Inserted %d publications for %s (total: %d)",
+                        len(org_publications), org_slug, total_inserted)
 
     logger.info("VACUUMing database to minimize file size...")
     conn.execute("VACUUM")
 
     conn.close()
-    logger.info("Seed build complete: %s (%d publications)", output_path, len(all_publications))
+    logger.info("Seed build complete: %s (%d new publications, %d total)",
+                output_path, total_inserted, existing_count + total_inserted)
 
 
 def build_delta(output_path, previous_db, schema_path, days=90):
