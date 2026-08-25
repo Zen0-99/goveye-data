@@ -74,6 +74,25 @@ BUCKET_MAPPING = {
     "10": "Family Lobbying",
 }
 
+# Short category name mapping — the Parliament API returns long names like
+# "Donations and other support (including loans) for activities as an MP"
+# which get truncated in the UI. Store the short version in `categoryName`
+# and the full version in `fullCategoryName`.
+SHORT_CATEGORY_NAMES = {
+    "Employment and earnings": "Employment",
+    "Employment and earnings - Ad hoc payments": "Employment (Ad hoc)",
+    "Employment and earnings - Ongoing paid employment": "Employment (Ongoing)",
+    "Donations and other support (including loans) for activities as an MP": "Donations",
+    "Gifts, benefits and hospitality from UK sources": "Gifts (UK)",
+    "Gifts and benefits from sources outside the UK": "Gifts (Non-UK)",
+    "Visits outside the UK": "Overseas Visits",
+    "Land and property (within or outside the UK)": "Property",
+    "Shareholdings": "Shareholdings",
+    "Miscellaneous": "Miscellaneous",
+    "Family members employed and receiving benefit from the Exchequer": "Family (Employed)",
+    "Family business interests": "Family (Business)",
+}
+
 
 def get_bucket(category_number):
     """Map an API category number to a high-level bucket label.
@@ -86,6 +105,14 @@ def get_bucket(category_number):
     # Try parent category (e.g. "1.1" -> "1")
     parent = category_number.split(".")[0]
     return BUCKET_MAPPING.get(parent)
+
+
+def get_short_category_name(full_name):
+    """Map a full API category name to a short version for UI display.
+
+    Returns the input unchanged if no mapping exists.
+    """
+    return SHORT_CATEGORY_NAMES.get(full_name, full_name)
 
 
 # --- Structured summary parser (Phase 18) ---
@@ -594,6 +621,10 @@ def map_interest_to_entity(interest_dto, timestamp_millis):
 
     bucket = get_bucket(category_number)
 
+    # Short category name for UI display; full name stored separately
+    full_category_name = category.get("name") or ""
+    short_category_name = get_short_category_name(full_category_name)
+
     # Parse structured fields from summary (Phase 18)
     parsed_fields = parse_interest_summary(summary_text, category_number)
 
@@ -605,7 +636,7 @@ def map_interest_to_entity(interest_dto, timestamp_millis):
         summary_text,                           # summary
         category.get("id") or 0,                # categoryId
         category_number,                         # categoryNumber
-        category.get("name") or "",             # categoryName
+        short_category_name,                    # categoryName (short)
         interest_dto.get("registrationDate"),    # registrationDate
         interest_dto.get("publishedDate"),       # publishedDate
         1 if interest_dto.get("rectified", False) else 0,  # rectified
@@ -637,6 +668,8 @@ def insert_interests(conn, interests, timestamp_millis):
     """Insert interests into the DB using batch executemany.
 
     Uses INSERT OR REPLACE so this works for both seed and delta modes.
+    Deduplicates interests that the Parliament API re-registers on amendment
+    (same donor + amount + category). Keeps only the latest per group.
     """
     cursor = conn.cursor()
     insert_sql = """
@@ -654,6 +687,27 @@ def insert_interests(conn, interests, timestamp_millis):
     """
 
     rows = [map_interest_to_entity(interest, timestamp_millis) for interest in interests]
+
+    # Deduplicate: same (memberId, donorName/summary, parsedAmountPence, categoryNumber)
+    # = same interest re-registered on amendment. Keep the latest by publishedDate.
+    deduped = {}
+    for row in rows:
+        # row indices: 0=id, 1=memberId, 2=summary, 4=categoryNumber,
+        # 6=registrationDate, 7=publishedDate, 11=parsedAmountPence, 14=donorName
+        key = (row[1], row[14] or row[2], row[11], row[4])
+        existing = deduped.get(key)
+        if existing is None:
+            deduped[key] = row
+        else:
+            # Keep the one with the latest publishedDate (or registrationDate)
+            existing_date = existing[7] or existing[6] or ""
+            new_date = row[7] or row[6] or ""
+            if new_date >= existing_date:
+                deduped[key] = row
+    rows = list(deduped.values())
+    if len(rows) < len(interests):
+        logger.info("Deduplicated %d -> %d interests (removed %d amendments)",
+                     len(interests), len(rows), len(interests) - len(rows))
 
     for i in range(0, len(rows), BATCH_SIZE):
         batch = rows[i:i + BATCH_SIZE]
