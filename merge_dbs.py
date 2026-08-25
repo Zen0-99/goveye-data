@@ -52,6 +52,7 @@ PER_API_TABLES = {
     "debates_db": ["debate_speeches"],
     "member_details_db": ["mp_synopsis", "mp_contacts", "mp_experience"],
     "hansard_db": ["hansard_contributions"],
+    "written_questions_db": ["written_questions"],
     "councils_db": ["councils"],
     "gov_publications_db": ["government_publications", "_publication_bodies"],
     "written_statements_db": ["written_statements"],
@@ -65,7 +66,8 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
               bio_data_db=None, expenses_db=None, mp_links_db=None,
               manifestos_db=None, historical_members_db=None, debates_db=None,
               member_details_db=None, hansard_db=None, councils_db=None,
-              gov_publications_db=None, written_statements_db=None, legislation_db=None):
+              gov_publications_db=None, written_statements_db=None,
+              legislation_db=None, written_questions_db=None):
     """Merge per-API DBs into a single goveye.db.
 
     Args:
@@ -115,6 +117,7 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
         "gov_publications_db": gov_publications_db,
         "written_statements_db": written_statements_db,
         "legislation_db": legislation_db,
+        "written_questions_db": written_questions_db,
     }
 
     for arg_name, db_path in source_dbs.items():
@@ -252,6 +255,7 @@ def main():
     parser.add_argument("--gov-publications-db", default=None, help="Path to gov_publications.db")
     parser.add_argument("--written-statements-db", default=None, help="Path to written_statements.db")
     parser.add_argument("--legislation-db", default=None, help="Path to legislation.db")
+    parser.add_argument("--written-questions-db", default=None, help="Path to written_questions.db")
     args = parser.parse_args()
 
     merge_dbs(
@@ -276,6 +280,7 @@ def main():
         gov_publications_db=args.gov_publications_db,
         written_statements_db=args.written_statements_db,
         legislation_db=args.legislation_db,
+        written_questions_db=args.written_questions_db,
     )
 
 
