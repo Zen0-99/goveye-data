@@ -88,6 +88,192 @@ def get_bucket(category_number):
     return BUCKET_MAPPING.get(parent)
 
 
+# --- Structured summary parser (Phase 18) ---
+
+STRUCTURED_FIELDS = [
+    "donorName", "paymentType", "paymentDescription", "donorStatus",
+    "donorAddress", "donorCompanyIdentifier", "destination", "visitPurpose",
+    "organisationName", "organisationDescription", "propertyLocation",
+    "propertyType", "hoursWorked", "familyMemberName",
+    "familyMemberRelationship", "familyMemberRole",
+]
+
+# Format B field-label → structured column mapping (case-insensitive)
+_FIELD_LABEL_MAP = {
+    "donor name": "donorName",
+    "payer name": "donorName",
+    "name of donor": "donorName",
+    "payment type": "paymentType",
+    "payment description": "paymentDescription",
+    "purpose of visit": "visitPurpose",
+    "description": "paymentDescription",
+    "donor status": "donorStatus",
+    "donor public address": "donorAddress",
+    "payer public address": "donorAddress",
+    "donor company identifier": "donorCompanyIdentifier",
+    "destination of visit": "destination",
+    "organisation name": "organisationName",
+    "organisation description": "organisationDescription",
+    "location": "propertyLocation",
+    "property type": "propertyType",
+    "hours worked": "hoursWorked",
+    "name": "familyMemberName",
+    "relationship": "familyMemberRelationship",
+    "role": "familyMemberRole",
+}
+
+# Labels to skip during Format B parsing (not mapped to structured columns)
+_SKIP_LABELS = {"registration date", "published date", "parent interest details",
+                "received date", "accepted date", "is sole beneficiary",
+                "is until further notice", "has sought acoba advice",
+                "end date", "start date", "regularity of payment",
+                "period for hours worked", "shareholding threshold",
+                "registrable date", "donation source", "donor company name",
+                "job title", "donor nature of business", "payer nature of business"}
+
+# Format A category-specific regex patterns
+_FORMAT_A_PATTERNS = {
+    # Cat 2/3/5: "Donor Name - £Amount"
+    "2": re.compile(r'^(.+?)\s*-\s*£'),
+    "3": re.compile(r'^(.+?)\s*-\s*£'),
+    "5": re.compile(r'^(.+?)\s*-\s*£'),
+    # Cat 4: "International visit to DESTINATION between DATE and DATE"
+    "4": re.compile(r'^International visit to\s+(.+?)\s+between\s+'),
+    # Cat 6: "Residential/Commercial in LOCATION"
+    "6": re.compile(r'^(Residential|Commercial)\s+in\s+(.+)$'),
+    # Cat 7: "Shares in COMPANY"
+    "7": re.compile(r'^Shares in\s+(.+)$'),
+    # Cat 9: "Name employed"
+    "9": re.compile(r'^(.+?)\s+employed\b'),
+    # Cat 10: "Name employed as Lobbyist"
+    "10": re.compile(r'^(.+?)\s+employed as\b'),
+}
+
+
+def parse_interest_summary(summary, category_number):
+    """Parse a raw interest summary string into 16 structured fields.
+
+    Two-stage parsing:
+      Stage 1 (Format B): Multi-line text with `FieldName: Value` labels.
+      Stage 2 (Format A): Single-line text with category-specific regex.
+      Stage 3 (Fallback): No match → all fields None.
+
+    Args:
+        summary: Raw summary text from the Interests API.
+        category_number: Category number string (e.g. "1", "1.1", "2").
+
+    Returns:
+        Dict with 16 keys (all defaulting to None).
+    """
+    result = {field: None for field in STRUCTURED_FIELDS}
+    if not summary or not isinstance(summary, str):
+        return result
+
+    # --- Stage 1: Format B (structured multi-line) ---
+    has_newline = "\n" in summary
+    if has_newline:
+        for line in summary.split("\n"):
+            line = line.strip()
+            if not line or ":" not in line:
+                continue
+            label, _, value = line.partition(":")
+            label_key = label.strip().lower()
+            value = value.strip()
+            if not value or label_key in _SKIP_LABELS:
+                continue
+            col = _FIELD_LABEL_MAP.get(label_key)
+            if col:
+                # Don't overwrite if already set (first occurrence wins)
+                if result[col] is None:
+                    result[col] = value
+
+    # If Format B yielded a donorName, we're done — don't run Format A
+    if result["donorName"] is not None:
+        return result
+
+    # --- Stage 2: Format A (category-specific regex) ---
+    cat = category_number or ""
+    parent_cat = cat.split(".")[0]
+
+    # Cat 1.1: "Payment received on DATE - £AMOUNT" → paymentDescription
+    if cat == "1.1":
+        result["paymentDescription"] = summary.strip()
+        return result
+
+    # Cat 1.2: "Agreement ... - £AMOUNT" → paymentDescription
+    if cat == "1.2":
+        result["paymentDescription"] = summary.strip()
+        return result
+
+    # Cat 1: job title / role description
+    if parent_cat == "1":
+        result["paymentDescription"] = summary.strip()
+        return result
+
+    # Cat 2/3/5: "Donor Name - £Amount"
+    if parent_cat in ("2", "3", "5"):
+        m = _FORMAT_A_PATTERNS.get(parent_cat)
+        if m:
+            match = m.match(summary)
+            if match:
+                result["donorName"] = match.group(1).strip()
+                return result
+
+    # Cat 4: "International visit to DESTINATION between DATE and DATE"
+    if parent_cat == "4":
+        m = _FORMAT_A_PATTERNS.get("4")
+        if m:
+            match = m.match(summary)
+            if match:
+                result["destination"] = match.group(1).strip()
+                return result
+
+    # Cat 6: "Residential/Commercial in LOCATION"
+    if parent_cat == "6":
+        m = _FORMAT_A_PATTERNS.get("6")
+        if m:
+            match = m.match(summary)
+            if match:
+                result["propertyType"] = match.group(1).strip()
+                result["propertyLocation"] = match.group(2).strip()
+                return result
+
+    # Cat 7: "Shares in COMPANY"
+    if parent_cat == "7":
+        m = _FORMAT_A_PATTERNS.get("7")
+        if m:
+            match = m.match(summary)
+            if match:
+                result["organisationName"] = match.group(1).strip()
+                return result
+
+    # Cat 8: free text → paymentDescription
+    if parent_cat == "8":
+        result["paymentDescription"] = summary.strip()
+        return result
+
+    # Cat 9: "Name employed"
+    if parent_cat == "9":
+        m = _FORMAT_A_PATTERNS.get("9")
+        if m:
+            match = m.match(summary)
+            if match:
+                result["familyMemberName"] = match.group(1).strip()
+                return result
+
+    # Cat 10: "Name employed as Lobbyist"
+    if parent_cat == "10":
+        m = _FORMAT_A_PATTERNS.get("10")
+        if m:
+            match = m.match(summary)
+            if match:
+                result["familyMemberName"] = match.group(1).strip()
+                return result
+
+    # --- Stage 3: Fallback — no match ---
+    return result
+
+
 # --- Monetary parser (D-01, D-02, D-03) ---
 
 # Core: £ followed by number with optional thousands separators
@@ -390,7 +576,8 @@ def fetch_all_interests(mp_limit=None, skip_mp_ids=None):
 def map_interest_to_entity(interest_dto, timestamp_millis):
     """Map an InterestDto to an interests table row tuple.
 
-    Includes the 3 new columns: parsedAmountPence, currencyCode, bucket.
+    Includes derived columns: parsedAmountPence, currencyCode, bucket,
+    and 16 structured fields parsed from the summary (Phase 18).
     """
     category = interest_dto.get("category") or {}
     category_number = category.get("number") or ""
@@ -401,18 +588,21 @@ def map_interest_to_entity(interest_dto, timestamp_millis):
     # Fallback: try parsing the summary field if fields didn't yield an amount.
     # The Parliament API sometimes puts the amount only in the summary text
     # (e.g. "Payment of £18,000 received on 12 March 2025").
+    summary_text = interest_dto.get("summary") or ""
     if parsed_pence is None:
-        summary = interest_dto.get("summary") or ""
-        parsed_pence, currency_code = _regex_extract(summary)
+        parsed_pence, currency_code = _regex_extract(summary_text)
 
     bucket = get_bucket(category_number)
+
+    # Parse structured fields from summary (Phase 18)
+    parsed_fields = parse_interest_summary(summary_text, category_number)
 
     member = interest_dto.get("member") or {}
 
     return (
         interest_dto.get("id") or 0,           # id
         member.get("id", 0) or 0,              # memberId
-        interest_dto.get("summary") or "",      # summary
+        summary_text,                           # summary
         category.get("id") or 0,                # categoryId
         category_number,                         # categoryNumber
         category.get("name") or "",             # categoryName
@@ -424,6 +614,22 @@ def map_interest_to_entity(interest_dto, timestamp_millis):
         parsed_pence,                            # parsedAmountPence
         currency_code,                           # currencyCode
         bucket,                                  # bucket
+        parsed_fields["donorName"],
+        parsed_fields["paymentType"],
+        parsed_fields["paymentDescription"],
+        parsed_fields["donorStatus"],
+        parsed_fields["donorAddress"],
+        parsed_fields["donorCompanyIdentifier"],
+        parsed_fields["destination"],
+        parsed_fields["visitPurpose"],
+        parsed_fields["organisationName"],
+        parsed_fields["organisationDescription"],
+        parsed_fields["propertyLocation"],
+        parsed_fields["propertyType"],
+        parsed_fields["hoursWorked"],
+        parsed_fields["familyMemberName"],
+        parsed_fields["familyMemberRelationship"],
+        parsed_fields["familyMemberRole"],
     )
 
 
@@ -437,8 +643,14 @@ def insert_interests(conn, interests, timestamp_millis):
         INSERT OR REPLACE INTO interests (
             id, memberId, summary, categoryId, categoryNumber, categoryName,
             registrationDate, publishedDate, rectified, fieldsJson, lastUpdated,
-            parsedAmountPence, currencyCode, bucket
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            parsedAmountPence, currencyCode, bucket,
+            donorName, paymentType, paymentDescription, donorStatus,
+            donorAddress, donorCompanyIdentifier, destination, visitPurpose,
+            organisationName, organisationDescription, propertyLocation,
+            propertyType, hoursWorked, familyMemberName,
+            familyMemberRelationship, familyMemberRole
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     rows = [map_interest_to_entity(interest, timestamp_millis) for interest in interests]

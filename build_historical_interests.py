@@ -31,6 +31,7 @@ from collections import defaultdict
 from datetime import datetime
 
 import schema as schema_module
+from build_interests import parse_interest_summary, STRUCTURED_FIELDS
 
 # --- Constants ---
 
@@ -521,6 +522,9 @@ def build_historical(output_path, goveye_db, csv_path, schema_path="schemas/bund
             }
             fields_json = json.dumps(fields)
 
+            # Parse structured fields from summary (Phase 18)
+            parsed_fields = parse_interest_summary(summary, cat_number)
+
             # Use a per-member, per-date hash for the ID to avoid duplicates
             # ID = offset + sequential counter
             historical_id += 1
@@ -540,6 +544,22 @@ def build_historical(output_path, goveye_db, csv_path, schema_path="schemas/bund
                 pence,
                 currency,
                 bucket,
+                parsed_fields["donorName"],
+                parsed_fields["paymentType"],
+                parsed_fields["paymentDescription"],
+                parsed_fields["donorStatus"],
+                parsed_fields["donorAddress"],
+                parsed_fields["donorCompanyIdentifier"],
+                parsed_fields["destination"],
+                parsed_fields["visitPurpose"],
+                parsed_fields["organisationName"],
+                parsed_fields["organisationDescription"],
+                parsed_fields["propertyLocation"],
+                parsed_fields["propertyType"],
+                parsed_fields["hoursWorked"],
+                parsed_fields["familyMemberName"],
+                parsed_fields["familyMemberRelationship"],
+                parsed_fields["familyMemberRole"],
             ))
 
             if len(batch) >= batch_size:
@@ -547,8 +567,14 @@ def build_historical(output_path, goveye_db, csv_path, schema_path="schemas/bund
                     "INSERT OR REPLACE INTO interests "
                     "(id, memberId, summary, categoryId, categoryNumber, categoryName, "
                     "registrationDate, publishedDate, rectified, fieldsJson, lastUpdated, "
-                    "parsedAmountPence, currencyCode, bucket) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "parsedAmountPence, currencyCode, bucket, "
+                    "donorName, paymentType, paymentDescription, donorStatus, "
+                    "donorAddress, donorCompanyIdentifier, destination, visitPurpose, "
+                    "organisationName, organisationDescription, propertyLocation, "
+                    "propertyType, hoursWorked, familyMemberName, "
+                    "familyMemberRelationship, familyMemberRole) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                    "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     batch,
                 )
                 conn.commit()
@@ -562,8 +588,14 @@ def build_historical(output_path, goveye_db, csv_path, schema_path="schemas/bund
             "INSERT OR REPLACE INTO interests "
             "(id, memberId, summary, categoryId, categoryNumber, categoryName, "
             "registrationDate, publishedDate, rectified, fieldsJson, lastUpdated, "
-            "parsedAmountPence, currencyCode, bucket) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "parsedAmountPence, currencyCode, bucket, "
+            "donorName, paymentType, paymentDescription, donorStatus, "
+            "donorAddress, donorCompanyIdentifier, destination, visitPurpose, "
+            "organisationName, organisationDescription, propertyLocation, "
+            "propertyType, hoursWorked, familyMemberName, "
+            "familyMemberRelationship, familyMemberRole) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             batch,
         )
         conn.commit()
