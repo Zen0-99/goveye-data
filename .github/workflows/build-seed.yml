@@ -33,7 +33,7 @@ jobs:
         run: |
           gh release download seed-latest --pattern seed-manifest.json --output seed-manifest.json || echo "No seed-manifest.json (first run)"
 
-      - name: Download all 16 per-API manifests
+      - name: Download all per-API manifests
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -53,6 +53,7 @@ jobs:
           gh release download debates-latest --pattern manifest.json --output debates_manifest.json || echo "WARN: debates manifest not found"
           gh release download member-details-latest --pattern manifest.json --output member_details_manifest.json || echo "WARN: member-details manifest not found"
           gh release download hansard-latest --pattern manifest.json --output hansard_manifest.json || echo "WARN: hansard manifest not found"
+          gh release download written-questions-latest --pattern manifest.json --output written_questions_manifest.json || echo "WARN: written-questions manifest not found"
           gh release download gov-publications-latest --pattern manifest.json --output gov_publications_manifest.json || echo "WARN: gov-publications manifest not found"
           gh release download written-statements-latest --pattern manifest.json --output written_statements_manifest.json || echo "WARN: written-statements manifest not found"
           gh release download legislation-latest --pattern manifest.json --output legislation_manifest.json || echo "WARN: legislation manifest not found"
@@ -80,6 +81,7 @@ jobs:
             --hansard-manifest hansard_manifest.json \
             --gov-publications-manifest gov_publications_manifest.json \
             --written-statements-manifest written_statements_manifest.json \
+            --written-questions-manifest written_questions_manifest.json \
             --legislation-manifest legislation_manifest.json >> $GITHUB_OUTPUT
 
       # --- Phase 2: Merge (only if data changed) ---
@@ -90,7 +92,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: per-api-cache
-          key: per-api-dbs-${{ hashFiles('mps_manifest.json', 'commons_manifest.json', 'lords_manifest.json', 'bills_manifest.json', 'committees_manifest.json', 'recess_manifest.json', 'interests_manifest.json', 'party_stats_manifest.json', 'bio_data_manifest.json', 'expenses_manifest.json', 'mp_links_manifest.json', 'manifestos_manifest.json', 'historical_members_manifest.json', 'debates_manifest.json', 'member_details_manifest.json', 'hansard_manifest.json', 'gov_publications_manifest.json', 'written_statements_manifest.json', 'legislation_manifest.json') }}
+          key: per-api-dbs-${{ hashFiles('mps_manifest.json', 'commons_manifest.json', 'lords_manifest.json', 'bills_manifest.json', 'committees_manifest.json', 'recess_manifest.json', 'interests_manifest.json', 'party_stats_manifest.json', 'bio_data_manifest.json', 'expenses_manifest.json', 'mp_links_manifest.json', 'manifestos_manifest.json', 'historical_members_manifest.json', 'debates_manifest.json', 'member_details_manifest.json', 'hansard_manifest.json', 'gov_publications_manifest.json', 'written_statements_manifest.json', 'written_questions_manifest.json', 'legislation_manifest.json') }}
           restore-keys: |
             per-api-dbs-
 
@@ -181,6 +183,10 @@ jobs:
                 echo "Downloading legislation.db (changed)"
                 gh release download legislation-latest --pattern legislation.db --output per-api-cache/legislation.db --clobber
                 ;;
+              written_questions)
+                echo "Downloading written_questions.db (changed)"
+                gh release download written-questions-latest --pattern written_questions.db --output per-api-cache/written_questions.db --clobber
+                ;;
             esac
           done
 
@@ -216,13 +222,14 @@ jobs:
           download_if_missing hansard.db hansard-latest
           download_if_missing gov_publications.db gov-publications-latest
           download_if_missing written_statements.db written-statements-latest
+          download_if_missing written_questions.db written-questions-latest
           download_if_missing legislation.db legislation-latest
 
-      - name: Verify all 19 DBs present
+      - name: Verify all 20 DBs present
         if: steps.check.outputs.needs_update == 'true'
         run: |
           missing=0
-          for db in mps.db commons_votes.db lords_votes.db bills.db committees.db recess.db interests.db party_stats.db bio_data.db expenses.db mp_links.db manifestos.db historical_members.db debates.db member_details.db hansard.db gov_publications.db written_statements.db legislation.db; do
+          for db in mps.db commons_votes.db lords_votes.db bills.db committees.db recess.db interests.db party_stats.db bio_data.db expenses.db mp_links.db manifestos.db historical_members.db debates.db member_details.db hansard.db gov_publications.db written_statements.db written_questions.db legislation.db; do
             if [ ! -f "per-api-cache/$db" ]; then
               echo "ERROR: $db is missing — cannot build a complete seed"
               missing=1
@@ -232,7 +239,7 @@ jobs:
             echo "One or more per-API DBs are missing. Ensure all per-API workflows have completed at least one successful run before building the seed."
             exit 1
           fi
-          echo "All 19 per-API DBs present."
+          echo "All 20 per-API DBs present."
 
       - name: Merge per-API DBs into goveye.db
         if: steps.check.outputs.needs_update == 'true'
@@ -249,6 +256,7 @@ jobs:
             --hansard-db per-api-cache/hansard.db \
             --gov-publications-db per-api-cache/gov_publications.db \
             --written-statements-db per-api-cache/written_statements.db \
+            --written-questions-db per-api-cache/written_questions.db \
             --legislation-db per-api-cache/legislation.db
 
       - name: Precompute stats tables (mp_stats + peer_averages)
@@ -319,6 +327,7 @@ jobs:
             --hansard-manifest hansard_manifest.json \
             --gov-publications-manifest gov_publications_manifest.json \
             --written-statements-manifest written_statements_manifest.json \
+            --written-questions-manifest written_questions_manifest.json \
             --legislation-manifest legislation_manifest.json
 
       - name: Publish to GitHub Releases
@@ -353,7 +362,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: per-api-cache
-          key: per-api-dbs-${{ hashFiles('mps_manifest.json', 'commons_manifest.json', 'lords_manifest.json', 'bills_manifest.json', 'committees_manifest.json', 'recess_manifest.json', 'interests_manifest.json', 'party_stats_manifest.json', 'bio_data_manifest.json', 'expenses_manifest.json', 'mp_links_manifest.json', 'manifestos_manifest.json', 'historical_members_manifest.json', 'debates_manifest.json', 'member_details_manifest.json', 'hansard_manifest.json', 'gov_publications_manifest.json', 'written_statements_manifest.json', 'legislation_manifest.json') }}
+          key: per-api-dbs-${{ hashFiles('mps_manifest.json', 'commons_manifest.json', 'lords_manifest.json', 'bills_manifest.json', 'committees_manifest.json', 'recess_manifest.json', 'interests_manifest.json', 'party_stats_manifest.json', 'bio_data_manifest.json', 'expenses_manifest.json', 'mp_links_manifest.json', 'manifestos_manifest.json', 'historical_members_manifest.json', 'debates_manifest.json', 'member_details_manifest.json', 'hansard_manifest.json', 'gov_publications_manifest.json', 'written_statements_manifest.json', 'written_questions_manifest.json', 'legislation_manifest.json') }}
 
       - name: No changes — skipping merge
         if: steps.check.outputs.needs_update == 'false'
