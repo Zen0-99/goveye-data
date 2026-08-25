@@ -57,12 +57,26 @@ def get_table_columns(conn, table_name):
 
 
 def get_table_rows(conn, table_name):
-    """Return all rows from a table as a list of dicts keyed by column name."""
+    """Return all rows from a table as a list of dicts keyed by column name.
+
+    SQLite stores Boolean values as INTEGER (0/1). The Kotlin entities use
+    Boolean fields, and kotlinx.serialization expects true/false in JSON.
+    Convert any column whose name starts with 'is' and has value 0/1 to
+    a Python bool so json.dump emits true/false.
+    """
     columns = get_table_columns(conn, table_name)
     cursor = conn.cursor()
     cursor.execute(f"SELECT * FROM {table_name}")
     rows = cursor.fetchall()
-    return [dict(zip(columns, row)) for row in rows]
+    result = []
+    for row in rows:
+        d = dict(zip(columns, row))
+        for col in columns:
+            if col.lower().startswith("is") and d[col] is not None:
+                if d[col] == 0 or d[col] == 1:
+                    d[col] = bool(d[col])
+        result.append(d)
+    return result
 
 
 def make_pk_key(row, pk_columns):
