@@ -154,9 +154,12 @@ _SKIP_LABELS = {"registration date", "published date", "parent interest details"
                 "received date", "accepted date", "is sole beneficiary",
                 "is until further notice", "has sought acoba advice",
                 "end date", "start date", "regularity of payment",
-                "period for hours worked", "shareholding threshold",
+                "shareholding threshold",
                 "registrable date", "donation source", "donor company name",
                 "job title", "donor nature of business", "payer nature of business"}
+
+# Labels to capture and append to hoursWorked (not standalone fields)
+_HOURS_PERIOD_LABEL = "period for hours worked"
 
 # Format A category-specific regex patterns
 _FORMAT_A_PATTERNS = {
@@ -197,6 +200,7 @@ def parse_interest_summary(summary, category_number):
         return result
 
     # --- Stage 1: Format B (structured multi-line) ---
+    hours_period = None
     has_newline = "\n" in summary
     if has_newline:
         for line in summary.split("\n"):
@@ -208,11 +212,19 @@ def parse_interest_summary(summary, category_number):
             value = value.strip()
             if not value or label_key in _SKIP_LABELS:
                 continue
+            # Capture hours period to append to hoursWorked later
+            if label_key == _HOURS_PERIOD_LABEL:
+                hours_period = value
+                continue
             col = _FIELD_LABEL_MAP.get(label_key)
             if col:
                 # Don't overwrite if already set (first occurrence wins)
                 if result[col] is None:
                     result[col] = value
+
+    # Append period to hoursWorked (e.g. "12.00" → "12.00 (weekly)")
+    if hours_period and result["hoursWorked"]:
+        result["hoursWorked"] = f"{result['hoursWorked']} ({hours_period.lower()})"
 
     # If Format B yielded a donorName, we're done — don't run Format A
     if result["donorName"] is not None:
