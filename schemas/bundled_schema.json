@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
   "database": {
-    "version": 20,
-    "identityHash": "334622a022c77fd05debbf26e3ae000f",
+    "version": 23,
+    "identityHash": "7d6b66382548e3e90face4b9425d2e00",
     "entities": [
       {
         "tableName": "mps",
@@ -1266,7 +1266,7 @@
       },
       {
         "tableName": "historical_members",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`twfyPersonId` INTEGER NOT NULL, `parliamentMemberId` INTEGER, `displayName` TEXT NOT NULL, `alternateNames` TEXT, `party` TEXT, `house` INTEGER NOT NULL, `startDate` TEXT, `endDate` TEXT, `constituency` TEXT, `isCurrent` INTEGER NOT NULL, `photo` BLOB, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`twfyPersonId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`twfyPersonId` INTEGER NOT NULL, `parliamentMemberId` INTEGER, `displayName` TEXT NOT NULL, `alternateNames` TEXT, `party` TEXT, `partyAbbreviation` TEXT, `partyColourHex` TEXT, `house` INTEGER NOT NULL, `startDate` TEXT, `endDate` TEXT, `constituency` TEXT, `isCurrent` INTEGER NOT NULL, `photo` BLOB, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`twfyPersonId`))",
         "fields": [
           {
             "fieldPath": "twfyPersonId",
@@ -1293,6 +1293,16 @@
           {
             "fieldPath": "party",
             "columnName": "party",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "partyAbbreviation",
+            "columnName": "partyAbbreviation",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "partyColourHex",
+            "columnName": "partyColourHex",
             "affinity": "TEXT"
           },
           {
@@ -2029,6 +2039,72 @@
         }
       },
       {
+        "tableName": "written_questions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `memberId` INTEGER NOT NULL, `uin` TEXT NOT NULL, `dateTabled` TEXT NOT NULL, `answeringBodyId` INTEGER NOT NULL, `answeringBodyName` TEXT NOT NULL, `questionText` TEXT NOT NULL, `house` INTEGER NOT NULL, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "memberId",
+            "columnName": "memberId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "uin",
+            "columnName": "uin",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dateTabled",
+            "columnName": "dateTabled",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "answeringBodyId",
+            "columnName": "answeringBodyId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "answeringBodyName",
+            "columnName": "answeringBodyName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "questionText",
+            "columnName": "questionText",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "house",
+            "columnName": "house",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastUpdated",
+            "columnName": "lastUpdated",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
         "tableName": "government_publications",
         "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `title` TEXT NOT NULL, `summary` TEXT NOT NULL, `url` TEXT NOT NULL, `documentType` TEXT NOT NULL, `organisation` TEXT NOT NULL, `organisationSlug` TEXT NOT NULL, `firstPublishedAt` TEXT NOT NULL, `publicUpdatedAt` TEXT NOT NULL, `imageUrl` TEXT, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`id`))",
         "fields": [
@@ -2365,7 +2441,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '334622a022c77fd05debbf26e3ae000f')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '7d6b66382548e3e90face4b9425d2e00')"
     ]
   }
 }
