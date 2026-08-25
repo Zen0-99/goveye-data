@@ -66,6 +66,7 @@ PER_API = [
     ("debates", "debates-manifest", "debates"),
     ("member_details", "member-details-manifest", "member_details"),
     ("hansard", "hansard-manifest", "hansard"),
+    ("written_questions", "written-questions-manifest", "written_questions"),
     ("gov_publications", "gov-publications-manifest", "gov_publications"),
     ("written_statements", "written-statements-manifest", "written_statements"),
     ("legislation", "legislation-manifest", "legislation"),
@@ -174,6 +175,7 @@ def main():
     parser.add_argument("--debates-manifest", default=None)
     parser.add_argument("--member-details-manifest", default=None)
     parser.add_argument("--hansard-manifest", default=None)
+    parser.add_argument("--written-questions-manifest", default=None)
     parser.add_argument("--gov-publications-manifest", default=None)
     parser.add_argument("--written-statements-manifest", default=None)
     parser.add_argument("--legislation-manifest", default=None)
@@ -196,6 +198,7 @@ def main():
         "debates": args.debates_manifest,
         "member_details": args.member_details_manifest,
         "hansard": args.hansard_manifest,
+        "written_questions": args.written_questions_manifest,
         "gov_publications": args.gov_publications_manifest,
         "written_statements": args.written_statements_manifest,
         "legislation": args.legislation_manifest,
