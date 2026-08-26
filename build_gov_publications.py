@@ -162,21 +162,51 @@ def fetch_publication_details(path):
 # --- HTML stripping for tag matching (Pitfall 6) ---
 
 def strip_html_for_tag_matching(html_text):
-    """Strip HTML/Govspeak tags from body text for tag pattern matching.
+    """Convert HTML/Govspeak body text to formatted plain text.
 
-    Pitfall 6: direct regex on raw HTML matches tags/attributes, not content.
-    BeautifulSoup extracts plain text from the HTML body.
+    Preserves paragraph breaks and bullet points while removing all HTML tags.
+    - <p>, <h1>-<h3> → double newline (paragraph break)
+    - <li> → "• " prefix + newline
+    - <br> → single newline
+    - Other tags → stripped
 
     Args:
         html_text: Raw HTML/Govspeak body text from the Content API.
 
     Returns:
-        Plain text string with HTML tags removed.
+        Plain text string with paragraph structure preserved.
     """
     if not html_text:
         return ""
     soup = BeautifulSoup(html_text, "html.parser")
-    return soup.get_text()
+
+    # Convert block-level elements to paragraph breaks
+    for tag in soup.find_all(["p", "h1", "h2", "h3", "h4", "h5", "h6"]):
+        tag.insert_before("\n\n")
+        tag.insert_after("\n\n")
+
+    # Convert list items to bullet points
+    for li in soup.find_all("li"):
+        li.insert_before("\n• ")
+
+    # Convert <br> to newlines
+    for br in soup.find_all("br"):
+        br.replace_with("\n")
+
+    text = soup.get_text()
+    # Collapse excessive blank lines (3+ → 2) and strip leading/trailing whitespace
+    lines = text.split("\n")
+    cleaned = []
+    blank_count = 0
+    for line in lines:
+        if line.strip() == "":
+            blank_count += 1
+            if blank_count <= 2:
+                cleaned.append("")
+        else:
+            blank_count = 0
+            cleaned.append(line.strip())
+    return "\n".join(cleaned).strip()
 
 
 # --- Mapping + insertion ---

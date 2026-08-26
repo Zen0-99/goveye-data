@@ -267,7 +267,6 @@ TAG_DICTIONARY = {
         r"railway",
         r"\btrain\b",
         r"\bbus\b",
-        r"\broad\b",
         r"highway",
         r"aviation",
         r"airport",
@@ -568,37 +567,25 @@ def build_bill_tags(conn, division_tag_rows):
 
 
 def build_publication_tags(conn):
-    """Build publication_tags by pattern matching on title + summary + body.
+    """Build publication_tags by pattern matching on title + summary + bodyText.
 
-    Per D-03: body text is stored in a build-time temp table
-    (_publication_bodies) that is NOT shipped. It is available at build time
-    for tag matching and dropped before publishing. We LEFT JOIN to it so
-    publications without a body row are still tagged from title + summary.
-
-    Per Pitfall 6: GOV.UK body text is Govspeak/HTML. We strip HTML with
-    BeautifulSoup before running TAG_DICTIONARY patterns to avoid matching
-    HTML tags/attributes rather than content.
+    bodyText is stored directly in the government_publications table (already
+    HTML-stripped by build_gov_publications.py). Publications without bodyText
+    are still tagged from title + summary alone.
     """
     cursor = conn.cursor()
 
-    # government_publications has no body column (D-03). Body lives in the
-    # _publication_bodies temp table (id, body). LEFT JOIN so publications
-    # without a body row still get title + summary matched.
     cursor.execute("""
-        SELECT gp.id, gp.title, gp.summary, pb.body
-        FROM government_publications gp
-        LEFT JOIN _publication_bodies pb ON gp.id = pb.id
+        SELECT id, title, summary, bodyText
+        FROM government_publications
     """)
     publications = cursor.fetchall()
     logger.info("Processing %d publications for tags", len(publications))
 
     tag_rows = []
-    for pub_id, title, summary, body in publications:
-        # Strip HTML from body before matching (Pitfall 6)
-        clean_body = ""
-        if body:
-            clean_body = BeautifulSoup(body, "html.parser").get_text()
-        combined_text = (title or "") + " " + (summary or "") + " " + clean_body
+    for pub_id, title, summary, body_text in publications:
+        # bodyText is already HTML-stripped plain text (build_gov_publications.py)
+        combined_text = (title or "") + " " + (summary or "") + " " + (body_text or "")
 
         for tag_name, patterns in TAG_DICTIONARY.items():
             hit_count = count_pattern_hits(combined_text, patterns)

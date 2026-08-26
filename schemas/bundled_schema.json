@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
   "database": {
-    "version": 24,
-    "identityHash": "2c411691f9d9ce54d0d3e3fc6d9d4013",
+    "version": 26,
+    "identityHash": "bb477f0c47d113f1182de836083163e2",
     "entities": [
       {
         "tableName": "mps",
@@ -720,7 +720,7 @@
       },
       {
         "tableName": "interests",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `memberId` INTEGER NOT NULL, `summary` TEXT NOT NULL, `categoryId` INTEGER NOT NULL, `categoryNumber` TEXT NOT NULL, `categoryName` TEXT NOT NULL, `registrationDate` TEXT, `publishedDate` TEXT, `rectified` INTEGER NOT NULL, `fieldsJson` TEXT NOT NULL, `lastUpdated` INTEGER NOT NULL, `parsedAmountPence` INTEGER, `currencyCode` TEXT, `bucket` TEXT, `donorName` TEXT, `paymentType` TEXT, `paymentDescription` TEXT, `donorStatus` TEXT, `donorAddress` TEXT, `donorCompanyIdentifier` TEXT, `destination` TEXT, `visitPurpose` TEXT, `organisationName` TEXT, `organisationDescription` TEXT, `propertyLocation` TEXT, `propertyType` TEXT, `hoursWorked` TEXT, `familyMemberName` TEXT, `familyMemberRelationship` TEXT, `familyMemberRole` TEXT, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `memberId` INTEGER NOT NULL, `summary` TEXT NOT NULL, `categoryId` INTEGER NOT NULL, `categoryNumber` TEXT NOT NULL, `categoryName` TEXT NOT NULL, `fullCategoryName` TEXT, `registrationDate` TEXT, `publishedDate` TEXT, `rectified` INTEGER NOT NULL, `fieldsJson` TEXT NOT NULL, `lastUpdated` INTEGER NOT NULL, `parsedAmountPence` INTEGER, `currencyCode` TEXT, `bucket` TEXT, `donorName` TEXT, `paymentType` TEXT, `paymentDescription` TEXT, `donorStatus` TEXT, `donorAddress` TEXT, `donorCompanyIdentifier` TEXT, `destination` TEXT, `visitPurpose` TEXT, `organisationName` TEXT, `organisationDescription` TEXT, `propertyLocation` TEXT, `propertyType` TEXT, `hoursWorked` TEXT, `familyMemberName` TEXT, `familyMemberRelationship` TEXT, `familyMemberRole` TEXT, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -757,6 +757,11 @@
             "columnName": "categoryName",
             "affinity": "TEXT",
             "notNull": true
+          },
+          {
+            "fieldPath": "fullCategoryName",
+            "columnName": "fullCategoryName",
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "registrationDate",
@@ -2186,7 +2191,7 @@
       },
       {
         "tableName": "government_publications",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `title` TEXT NOT NULL, `summary` TEXT NOT NULL, `url` TEXT NOT NULL, `documentType` TEXT NOT NULL, `organisation` TEXT NOT NULL, `organisationSlug` TEXT NOT NULL, `firstPublishedAt` TEXT NOT NULL, `publicUpdatedAt` TEXT NOT NULL, `imageUrl` TEXT, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `title` TEXT NOT NULL, `summary` TEXT NOT NULL, `url` TEXT NOT NULL, `documentType` TEXT NOT NULL, `organisation` TEXT NOT NULL, `organisationSlug` TEXT NOT NULL, `firstPublishedAt` TEXT NOT NULL, `publicUpdatedAt` TEXT NOT NULL, `imageUrl` TEXT, `bodyText` TEXT, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -2248,6 +2253,11 @@
             "affinity": "TEXT"
           },
           {
+            "fieldPath": "bodyText",
+            "columnName": "bodyText",
+            "affinity": "TEXT"
+          },
+          {
             "fieldPath": "lastUpdated",
             "columnName": "lastUpdated",
             "affinity": "INTEGER",
@@ -2263,7 +2273,7 @@
       },
       {
         "tableName": "legislation",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `title` TEXT NOT NULL, `type` TEXT NOT NULL, `year` INTEGER NOT NULL, `number` INTEGER NOT NULL, `date` TEXT NOT NULL, `url` TEXT NOT NULL, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `title` TEXT NOT NULL, `type` TEXT NOT NULL, `year` INTEGER NOT NULL, `number` INTEGER NOT NULL, `date` TEXT NOT NULL, `url` TEXT NOT NULL, `lastUpdated` INTEGER NOT NULL, `bodyText` TEXT, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -2312,6 +2322,11 @@
             "columnName": "lastUpdated",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "bodyText",
+            "columnName": "bodyText",
+            "affinity": "TEXT"
           }
         ],
         "primaryKey": {
@@ -2521,7 +2536,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '2c411691f9d9ce54d0d3e3fc6d9d4013')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'bb477f0c47d113f1182de836083163e2')"
     ]
   }
 }
