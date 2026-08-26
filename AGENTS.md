@@ -90,9 +90,15 @@ All `build_*.py` scripts support two modes:
 
 ## Schema sync
 
+**Automated:** `sync_schema.py` fetches the latest Room schema JSON from the GovEye
+GitHub repo and overwrites `schemas/bundled_schema.json` before every CI build.
+The committed `bundled_schema.json` is a fallback (used if the fetch fails) and
+for local dev. Run `python sync_schema.py` manually after pulling GovEye changes
+that modify Room entities.
+
 When Room entities change in the GovEye app:
 1. Export the new schema JSON from Room (`exportSchema=true`) → `core/data/schemas/com.goveye.app.data.local.BundledDatabase/N.json`
-2. Copy to `goveye-data/schemas/bundled_schema.json`
+2. Push GovEye — goveye-data CI will auto-sync the schema on the next workflow run
 3. Update build scripts if new entities need data fetching
 4. Bump `version` in `BundledDatabase.kt` and add a migration in `DatabaseModule.kt`
 5. Trigger a seed build
