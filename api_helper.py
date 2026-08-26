@@ -63,6 +63,26 @@ def api_get(url, params=None, timeout=60, max_retries=3):
                 attempt + 1, max_retries, url, wait, type(e).__name__,
             )
             time.sleep(wait)
+        except requests.exceptions.HTTPError as e:
+            # Retry on 5xx server errors (transient — Parliament API sometimes
+            # returns 500 on large paginated queries). Don't retry 4xx (client
+            # errors are permanent — bad URL, auth, etc.).
+            if e.response.status_code < 500:
+                raise
+            last_exc = e
+            wait = 2 ** attempt
+            logger.warning(
+                "API retry %d/%d for %s (waiting %ds): HTTP %d",
+                attempt + 1, max_retries, url, wait, e.response.status_code,
+            )
+            time.sleep(wait)
+            last_exc = e
+            wait = 2 ** attempt  # exponential backoff: 1s, 2s, 4s
+            logger.warning(
+                "API retry %d/%d for %s (waiting %ds): %s",
+                attempt + 1, max_retries, url, wait, type(e).__name__,
+            )
+            time.sleep(wait)
     raise last_exc
 
 
