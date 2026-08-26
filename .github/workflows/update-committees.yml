@@ -23,6 +23,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
+
       - name: Check if parliament is in recess
         id: recess_check
         run: python check_recess.py

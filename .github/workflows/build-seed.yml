@@ -23,6 +23,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
+
       # --- Phase 1: Check if any per-API DB changed ---
 
       - name: Download seed-manifest.json (if exists)

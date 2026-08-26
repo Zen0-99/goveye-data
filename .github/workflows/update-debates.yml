@@ -43,6 +43,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
+
       - name: Download dependency DBs (commons-votes, lords-votes, mps, historical-members)
         run: |
           # Download the latest commons-votes.db, lords-votes.db, mps.db, and historical_members.db
@@ -127,6 +130,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
+
       - name: Download dependency DBs
         uses: actions/download-artifact@v4
         with:
@@ -179,6 +185,9 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
 
       - name: Download dependency DBs
         uses: actions/download-artifact@v4
@@ -238,6 +247,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
+
       - name: Download dependency DBs
         uses: actions/download-artifact@v4
         with:
@@ -295,6 +307,9 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
 
       - name: Download dependency DBs
         uses: actions/download-artifact@v4
@@ -354,6 +369,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
+
       - name: Download dependency DBs
         uses: actions/download-artifact@v4
         with:
@@ -412,6 +430,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
+
       - name: Download dependency DBs
         uses: actions/download-artifact@v4
         with:
@@ -467,6 +488,9 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
       - name: Download dependency DBs
         uses: actions/download-artifact@v4
         with:
@@ -519,6 +543,9 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
       - name: Download dependency DBs
         uses: actions/download-artifact@v4
         with:
@@ -571,6 +598,9 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
       - name: Download dependency DBs
         uses: actions/download-artifact@v4
         with:
@@ -623,6 +653,9 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
 
       # --- Delta mode: build incrementally in this job ---
 
