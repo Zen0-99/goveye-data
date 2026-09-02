@@ -11,7 +11,7 @@ permissions:
 jobs:
   build-seed:
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # Check phase is ~30s; merge + precompute + tags can take ~20 min on full rebuild
+    timeout-minutes: 45  # Check phase is ~30s; full rebuild with all 20 APIs + tags can take ~35 min
 
     steps:
       - uses: actions/checkout@v4
