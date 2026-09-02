@@ -11,7 +11,7 @@ permissions:
 jobs:
   build-seed:
     runs-on: ubuntu-latest
-    timeout-minutes: 45  # Check phase is ~30s; full rebuild with all 20 APIs + tags can take ~35 min
+    timeout-minutes: 20  # Incremental build: ~2-3 min typical, 15 min worst case (full rebuild fallback)
 
     steps:
       - uses: actions/checkout@v4
@@ -244,9 +244,24 @@ jobs:
           fi
           echo "Per-API DB verification complete."
 
+      - name: Download previous goveye.db (for incremental merge)
+        if: steps.check.outputs.needs_update == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download seed-latest --pattern goveye.db --output prev_goveye.db --clobber || echo "No previous goveye.db (first run or download failed — will fresh-create)"
+
       - name: Merge per-API DBs into goveye.db
         if: steps.check.outputs.needs_update == 'true'
         run: |
+          PREV_DB_ARG=""
+          if [ -f prev_goveye.db ]; then
+            PREV_DB_ARG="--previous-db prev_goveye.db"
+            echo "Using previous goveye.db for incremental merge"
+          else
+            echo "No previous DB — fresh create"
+          fi
           python merge_dbs.py --output goveye.db --schema schemas/bundled_schema.json \
             --mps-db per-api-cache/mps.db --commons-votes-db per-api-cache/commons_votes.db \
             --lords-votes-db per-api-cache/lords_votes.db --bills-db per-api-cache/bills.db \
@@ -260,7 +275,8 @@ jobs:
             --gov-publications-db per-api-cache/gov_publications.db \
             --written-statements-db per-api-cache/written_statements.db \
             --written-questions-db per-api-cache/written_questions.db \
-            --legislation-db per-api-cache/legislation.db
+            --legislation-db per-api-cache/legislation.db \
+            $PREV_DB_ARG
 
       - name: Precompute stats tables (mp_stats + peer_averages)
         if: steps.check.outputs.needs_update == 'true'
@@ -274,12 +290,22 @@ jobs:
         env:
           CHANGED_APIS: ${{ steps.check.outputs.changed_apis }}
         run: |
-          python build_tags.py --output goveye.db --schema schemas/bundled_schema.json --changed-apis "$CHANGED_APIS"
+          INCREMENTAL=""
+          if [ -f prev_goveye.db ]; then
+            INCREMENTAL="--incremental"
+            echo "Incremental tag build (previous DB available)"
+          fi
+          python build_tags.py --output goveye.db --schema schemas/bundled_schema.json --changed-apis "$CHANGED_APIS" $INCREMENTAL
 
       - name: Build MP tags (post-merge, 14-02)
         if: steps.check.outputs.needs_update == 'true' && success()
         run: |
-          python build_mp_tags.py --output goveye.db --schema schemas/bundled_schema.json
+          INCREMENTAL=""
+          if [ -f prev_goveye.db ]; then
+            INCREMENTAL="--incremental"
+            echo "Incremental MP tag build (previous DB available)"
+          fi
+          python build_mp_tags.py --output goveye.db --schema schemas/bundled_schema.json $INCREMENTAL
 
       - name: Build party leaders (post-merge, 14-02)
         if: steps.check.outputs.needs_update == 'true' && success()

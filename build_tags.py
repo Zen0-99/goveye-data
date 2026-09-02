@@ -449,20 +449,49 @@ def count_pattern_hits(text, patterns):
     return total
 
 
-def build_division_tags(conn):
-    """Build division_tags by pattern matching on speeches + titles."""
+def build_division_tags(conn, incremental=False):
+    """Build division_tags by pattern matching on speeches + titles.
+
+    If incremental=True, only process divisions that don't already have
+    tags in the division_tags table (new divisions added since last build).
+    Existing tags are retained.
+    """
     cursor = conn.cursor()
 
-    # Get all divisions
-    cursor.execute("SELECT id, title FROM divisions")
-    divisions = cursor.fetchall()
-    logger.info("Processing %d divisions for tags", len(divisions))
+    if incremental:
+        # Only process divisions that don't have any tags yet
+        cursor.execute("""
+            SELECT d.id, d.title FROM divisions d
+            WHERE NOT EXISTS (
+                SELECT 1 FROM division_tags dt WHERE dt.divisionId = d.id
+            )
+        """)
+        divisions = cursor.fetchall()
+        logger.info("Processing %d new divisions for tags (incremental)", len(divisions))
+    else:
+        # Get all divisions
+        cursor.execute("SELECT id, title FROM divisions")
+        divisions = cursor.fetchall()
+        logger.info("Processing %d divisions for tags", len(divisions))
+
+    if not divisions:
+        logger.info("No new divisions to tag — skipping")
+        return []
 
     # Get all debate speeches grouped by divisionId
-    cursor.execute("SELECT divisionId, speechText FROM debate_speeches")
+    # Only fetch speeches for the divisions we're processing
+    division_ids = [d[0] for d in divisions]
+    # Process in chunks to avoid SQL parameter limits
     speeches_by_division = defaultdict(list)
-    for division_id, speech_text in cursor.fetchall():
-        speeches_by_division[division_id].append(speech_text or "")
+    for i in range(0, len(division_ids), 500):
+        chunk = division_ids[i:i + 500]
+        placeholders = ",".join("?" * len(chunk))
+        cursor.execute(
+            f"SELECT divisionId, speechText FROM debate_speeches WHERE divisionId IN ({placeholders})",
+            chunk,
+        )
+        for division_id, speech_text in cursor.fetchall():
+            speeches_by_division[division_id].append(speech_text or "")
 
     # Build tags
     tag_rows = []
@@ -497,14 +526,31 @@ def build_division_tags(conn):
     return tag_rows
 
 
-def build_bill_tags(conn, division_tag_rows):
-    """Build bill_tags from bill titles + aggregated division tags."""
+def build_bill_tags(conn, division_tag_rows, incremental=False):
+    """Build bill_tags from bill titles + aggregated division tags.
+
+    If incremental=True, only process bills that don't already have tags.
+    """
     cursor = conn.cursor()
 
-    # Get all bills (use shortTitle + longTitle for matching)
-    cursor.execute("SELECT id, shortTitle, longTitle FROM bills")
-    bills = cursor.fetchall()
-    logger.info("Processing %d bills for tags", len(bills))
+    if incremental:
+        cursor.execute("""
+            SELECT id, shortTitle, longTitle FROM bills b
+            WHERE NOT EXISTS (
+                SELECT 1 FROM bill_tags bt WHERE bt.billId = b.id
+            )
+        """)
+        bills = cursor.fetchall()
+        logger.info("Processing %d new bills for tags (incremental)", len(bills))
+    else:
+        # Get all bills (use shortTitle + longTitle for matching)
+        cursor.execute("SELECT id, shortTitle, longTitle FROM bills")
+        bills = cursor.fetchall()
+        logger.info("Processing %d bills for tags", len(bills))
+
+    if not bills:
+        logger.info("No new bills to tag — skipping")
+        return []
 
     # Build a map: divisionId → set of tags
     division_tags_map = defaultdict(set)
@@ -566,21 +612,37 @@ def build_bill_tags(conn, division_tag_rows):
     return tag_rows
 
 
-def build_publication_tags(conn):
+def build_publication_tags(conn, incremental=False):
     """Build publication_tags by pattern matching on title + summary + bodyText.
 
     bodyText is stored directly in the government_publications table (already
     HTML-stripped by build_gov_publications.py). Publications without bodyText
     are still tagged from title + summary alone.
+
+    If incremental=True, only process publications that don't already have tags.
     """
     cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT id, title, summary, bodyText
-        FROM government_publications
-    """)
-    publications = cursor.fetchall()
-    logger.info("Processing %d publications for tags", len(publications))
+    if incremental:
+        cursor.execute("""
+            SELECT id, title, summary, bodyText FROM government_publications g
+            WHERE NOT EXISTS (
+                SELECT 1 FROM publication_tags pt WHERE pt.publicationId = g.id
+            )
+        """)
+        publications = cursor.fetchall()
+        logger.info("Processing %d new publications for tags (incremental)", len(publications))
+    else:
+        cursor.execute("""
+            SELECT id, title, summary, bodyText
+            FROM government_publications
+        """)
+        publications = cursor.fetchall()
+        logger.info("Processing %d publications for tags", len(publications))
+
+    if not publications:
+        logger.info("No new publications to tag — skipping")
+        return []
 
     tag_rows = []
     for pub_id, title, summary, body_text in publications:
@@ -605,13 +667,30 @@ def build_publication_tags(conn):
     return tag_rows
 
 
-def build_statement_tags(conn):
-    """Build statement_tags by pattern matching on title + text."""
+def build_statement_tags(conn, incremental=False):
+    """Build statement_tags by pattern matching on title + text.
+
+    If incremental=True, only process statements that don't already have tags.
+    """
     cursor = conn.cursor()
 
-    cursor.execute("SELECT id, title, text FROM written_statements")
-    statements = cursor.fetchall()
-    logger.info("Processing %d written statements for tags", len(statements))
+    if incremental:
+        cursor.execute("""
+            SELECT id, title, text FROM written_statements s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM statement_tags st WHERE st.statementId = s.id
+            )
+        """)
+        statements = cursor.fetchall()
+        logger.info("Processing %d new written statements for tags (incremental)", len(statements))
+    else:
+        cursor.execute("SELECT id, title, text FROM written_statements")
+        statements = cursor.fetchall()
+        logger.info("Processing %d written statements for tags", len(statements))
+
+    if not statements:
+        logger.info("No new statements to tag — skipping")
+        return []
 
     tag_rows = []
     for stmt_id, title, text in statements:
@@ -635,16 +714,32 @@ def build_statement_tags(conn):
     return tag_rows
 
 
-def build_legislation_tags(conn):
+def build_legislation_tags(conn, incremental=False):
     """Build legislation_tags by pattern matching on title only.
 
     Legislation has no body text in the DB — only the title is available.
+
+    If incremental=True, only process legislation that doesn't already have tags.
     """
     cursor = conn.cursor()
 
-    cursor.execute("SELECT id, title FROM legislation")
-    legislation = cursor.fetchall()
-    logger.info("Processing %d legislation items for tags", len(legislation))
+    if incremental:
+        cursor.execute("""
+            SELECT id, title FROM legislation l
+            WHERE NOT EXISTS (
+                SELECT 1 FROM legislation_tags lt WHERE lt.legislationId = l.id
+            )
+        """)
+        legislation = cursor.fetchall()
+        logger.info("Processing %d new legislation items for tags (incremental)", len(legislation))
+    else:
+        cursor.execute("SELECT id, title FROM legislation")
+        legislation = cursor.fetchall()
+        logger.info("Processing %d legislation items for tags", len(legislation))
+
+    if not legislation:
+        logger.info("No new legislation to tag — skipping")
+        return []
 
     tag_rows = []
     for leg_id, title in legislation:
@@ -744,6 +839,12 @@ def main():
              "If provided and none of this script's dependencies are in the list, "
              "tag building is skipped. If omitted, full rebuild runs.",
     )
+    parser.add_argument(
+        "--incremental", action="store_true",
+        help="Incremental mode: only tag rows that don't already have tags. "
+             "Existing tags are retained. Use after an incremental merge_dbs.py "
+             "run where only changed per-API tables were replaced.",
+    )
     args = parser.parse_args()
 
     # Delta skip: if changed_apis is provided and none of our dependencies changed,
@@ -768,23 +869,28 @@ def main():
     conn = sqlite3.connect(args.output)
     cursor = conn.cursor()
 
-    # Clear existing tags
-    cursor.execute("DELETE FROM division_tags")
-    cursor.execute("DELETE FROM bill_tags")
-    cursor.execute("DELETE FROM tag_metadata")
-    # Clear announcement tag tables (may not exist on old DBs — wrap in try/except)
-    for table in ("publication_tags", "statement_tags", "legislation_tags"):
-        try:
-            cursor.execute(f"DELETE FROM {table}")
-        except sqlite3.OperationalError:
-            pass
-    conn.commit()
+    if args.incremental:
+        # Incremental mode: DON'T clear existing tags.
+        # Only process rows that don't have tags yet.
+        logger.info("Incremental tag build — retaining existing tags, processing new rows only")
+    else:
+        # Full rebuild: clear existing tags
+        cursor.execute("DELETE FROM division_tags")
+        cursor.execute("DELETE FROM bill_tags")
+        cursor.execute("DELETE FROM tag_metadata")
+        # Clear announcement tag tables (may not exist on old DBs — wrap in try/except)
+        for table in ("publication_tags", "statement_tags", "legislation_tags"):
+            try:
+                cursor.execute(f"DELETE FROM {table}")
+            except sqlite3.OperationalError:
+                pass
+        conn.commit()
 
     # Build division tags
-    division_tag_rows = build_division_tags(conn)
+    division_tag_rows = build_division_tags(conn, incremental=args.incremental)
 
     # Build bill tags (using division tags as input)
-    bill_tag_rows = build_bill_tags(conn, division_tag_rows)
+    bill_tag_rows = build_bill_tags(conn, division_tag_rows, incremental=args.incremental)
 
     # Build announcement tags (publication, statement, legislation)
     # These tables may not exist on old DBs — wrap in try/except so the
@@ -793,22 +899,34 @@ def main():
     statement_tag_rows = []
     legislation_tag_rows = []
     try:
-        publication_tag_rows = build_publication_tags(conn)
+        publication_tag_rows = build_publication_tags(conn, incremental=args.incremental)
     except sqlite3.OperationalError as e:
         logger.warning("Skipping publication tags: %s", e)
     try:
-        statement_tag_rows = build_statement_tags(conn)
+        statement_tag_rows = build_statement_tags(conn, incremental=args.incremental)
     except sqlite3.OperationalError as e:
         logger.warning("Skipping statement tags: %s", e)
     try:
-        legislation_tag_rows = build_legislation_tags(conn)
+        legislation_tag_rows = build_legislation_tags(conn, incremental=args.incremental)
     except sqlite3.OperationalError as e:
         logger.warning("Skipping legislation tags: %s", e)
 
     # Build tag metadata (descriptions + counts)
-    build_tag_metadata(conn, division_tag_rows, bill_tag_rows,
-                       publication_tag_rows, statement_tag_rows,
-                       legislation_tag_rows)
+    # In incremental mode, rebuild metadata from ALL tags (existing + new)
+    # so counts reflect the complete dataset.
+    if args.incremental:
+        # Read all existing tags to rebuild metadata counts
+        cursor.execute("SELECT divisionId, tag FROM division_tags")
+        all_div_tags = cursor.fetchall()
+        cursor.execute("SELECT billId, tag FROM bill_tags")
+        all_bill_tags = cursor.fetchall()
+        build_tag_metadata(conn, all_div_tags, all_bill_tags,
+                           publication_tag_rows, statement_tag_rows,
+                           legislation_tag_rows)
+    else:
+        build_tag_metadata(conn, division_tag_rows, bill_tag_rows,
+                           publication_tag_rows, statement_tag_rows,
+                           legislation_tag_rows)
 
     conn.close()
     elapsed = time.time() - start
