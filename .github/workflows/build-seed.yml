@@ -11,7 +11,7 @@ permissions:
 jobs:
   build-seed:
     runs-on: ubuntu-latest
-    timeout-minutes: 20  # Incremental build: ~2-3 min typical, 15 min worst case (full rebuild fallback)
+    timeout-minutes: 45  # One-time full rebuild after 11-day gap; revert to 20 after
 
     steps:
       - uses: actions/checkout@v4
@@ -246,10 +246,25 @@ jobs:
 
       - name: Download previous goveye.db (for incremental merge)
         if: steps.check.outputs.needs_update == 'true'
+        id: download_prev
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Only use previous DB for incremental merge if the seed was built
+          # recently (within 3 days). After a long gap, too many rows are new
+          # and incremental is slower than fresh create.
+          if [ -f seed-manifest.json ]; then
+            GENERATED=$(python -c "import json; from datetime import datetime, timezone; d=json.load(open('seed-manifest.json')); print(d.get('generatedAt',''))" 2>/dev/null || echo "")
+            if [ -n "$GENERATED" ]; then
+              AGE_DAYS=$(python -c "from datetime import datetime, timezone; d=datetime.fromisoformat('$GENERATED'.replace('Z','+00:00')); print((datetime.now(timezone.utc)-d).days)" 2>/dev/null || echo "999")
+              echo "age_days=$AGE_DAYS"
+              if [ "$AGE_DAYS" -gt 3 ]; then
+                echo "Previous seed is $AGE_DAYS days old — too stale for incremental, will fresh-create"
+                exit 0
+              fi
+            fi
+          fi
           gh release download seed-latest --pattern goveye.db --output prev_goveye.db --clobber || echo "No previous goveye.db (first run or download failed — will fresh-create)"
 
       - name: Merge per-API DBs into goveye.db
