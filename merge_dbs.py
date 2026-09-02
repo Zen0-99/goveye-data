@@ -11,31 +11,23 @@ so the FTS index populates automatically (Pitfall 2).
 
 Missing per-API DBs are skipped — their tables exist but are empty.
 
-Incremental mode (--previous-db): if a previous goveye.db is provided,
-the script copies it as the starting point and only REPLACEs tables from
-changed per-API DBs. Tag/precompute tables (division_tags, bill_tags,
-mp_tags, mp_stats, etc.) are retained from the previous seed, so the
-post-merge tag scripts only need to process new/changed rows.
-
-Falls back to fresh-create if:
-  - No --previous-db is provided
-  - The previous DB's room_master_table identity hash doesn't match
-    the current schema (schema changed — full rebuild required)
-  - The previous DB is missing tables that the current schema expects
+Tag tables (division_tags, bill_tags, mp_tags, etc.) are always empty
+after merge. They are populated by post-merge scripts (build_tags.py,
+build_mp_tags.py). For incremental tag processing, restore_tags.py
+restores the previous build's tag tables from tags.db before running
+the tag scripts.
 
 Usage:
   python merge_dbs.py --output goveye.db --schema schemas/bundled_schema.json \
     --mps-db mps.db --commons-votes-db commons_votes.db \
     --lords-votes-db lords_votes.db --bills-db bills.db \
     --committees-db committees.db --recess-db recess.db \
-    --interests-db interests.db \
-    --previous-db prev_goveye.db
+    --interests-db interests.db
 """
 
 import argparse
 import logging
 import os
-import shutil
 import sqlite3
 import sys
 
@@ -74,82 +66,6 @@ PER_API_TABLES = {
 }
 
 
-def _can_reuse_previous_db(previous_db, all_table_names, expected_identity_hash):
-    """Check if the previous goveye.db can be reused for incremental merge.
-
-    Returns True if:
-      - room_master_table identity hash matches the current schema
-      - All non-FTS, non-tag, non-precompute tables exist (core data tables)
-    Returns False if any check fails (schema changed, corrupted, etc.)
-    """
-    try:
-        conn = sqlite3.connect(previous_db)
-        cursor = conn.cursor()
-
-        # Check room_master_table identity hash
-        cursor.execute("SELECT identity_hash FROM room_master_table WHERE id = 42")
-        row = cursor.fetchone()
-        if not row or row[0] != expected_identity_hash:
-            logger.info("Previous DB identity hash mismatch — schema changed, full rebuild needed")
-            conn.close()
-            return False
-
-        # Check that core data tables exist (tag/precompute tables may be
-        # missing if the previous build was before they were added — that's
-        # fine, _ensure_all_tables_exist will create them)
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )
-        existing_tables = {row[0] for row in cursor.fetchall()}
-        conn.close()
-
-        # Only require the core per-API data tables to exist. Tag/precompute
-        # tables can be created fresh if missing.
-        core_tables = set()
-        for tables in PER_API_TABLES.values():
-            core_tables.update(tables)
-
-        missing_core = core_tables - existing_tables
-        if missing_core:
-            logger.info("Previous DB missing core tables: %s — full rebuild needed",
-                        sorted(missing_core))
-            return False
-
-        return True
-    except Exception as e:
-        logger.info("Cannot reuse previous DB: %s", e)
-        return False
-
-
-def _ensure_all_tables_exist(conn, schema, all_table_names):
-    """Create any tables from the schema that don't exist in the DB.
-
-    This handles the case where the previous DB was built with an older
-    schema that had fewer tables. New tables are created empty (with FTS
-    triggers) so the merged DB has the complete schema.
-    """
-    cursor = conn.cursor()
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    existing = {row[0] for row in cursor.fetchall()}
-
-    created = schema_module.get_create_sql(schema)
-    for table_name, create_sql in created:
-        if table_name not in existing and table_name in all_table_names:
-            cursor.execute(create_sql)
-            logger.info("Created missing table %s (not in previous DB)", table_name)
-
-    # Also create FTS triggers for any newly created tables
-    fts_triggers = schema_module.get_fts_triggers(schema)
-    for trigger_name, trigger_sql in fts_triggers:
-        if trigger_name not in existing:
-            try:
-                cursor.execute(trigger_sql)
-            except sqlite3.OperationalError:
-                pass  # Trigger may reference a table that still doesn't exist
-
-    conn.commit()
-
-
 def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
               lords_votes_db=None, bills_db=None, committees_db=None,
               recess_db=None, interests_db=None, party_stats_db=None,
@@ -157,9 +73,12 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
               manifestos_db=None, historical_members_db=None, debates_db=None,
               member_details_db=None, hansard_db=None, councils_db=None,
               gov_publications_db=None, written_statements_db=None,
-              legislation_db=None, written_questions_db=None,
-              previous_db=None):
+              legislation_db=None, written_questions_db=None):
     """Merge per-API DBs into a single goveye.db.
+
+    Always creates a fresh goveye.db with all tables from the schema.
+    Tag tables are empty after merge — use restore_tags.py to restore
+    the previous build's tag tables for incremental processing.
 
     Args:
         output_path: Path for the merged goveye.db file.
@@ -172,48 +91,21 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
         recess_db: Path to recess.db (or None).
         interests_db: Path to interests.db (or None).
         party_stats_db: Path to party_stats.db (or None).
-        previous_db: Path to previous goveye.db for incremental merge.
-            If provided and schema-compatible, the previous DB is copied
-            as the starting point and only changed per-API tables are
-            REPLACEd. Tag/precompute tables are retained.
     """
     schema = schema_module.load_schema(schema_path)
     all_table_names = schema_module.get_table_names(schema)
-    expected_identity_hash = schema_module.get_identity_hash(schema)
 
-    # --- Determine merge mode: incremental (fold into previous) or fresh ---
-    use_incremental = False
-    if previous_db and os.path.exists(previous_db):
-        use_incremental = _can_reuse_previous_db(
-            previous_db, all_table_names, expected_identity_hash
-        )
+    logger.info("Fresh merge: creating goveye.db from per-API DBs")
 
-    if use_incremental:
-        logger.info("Incremental merge: copying previous DB and replacing changed tables")
-        # Copy previous DB to output (don't modify the original)
-        if os.path.exists(output_path):
-            os.remove(output_path)
-        shutil.copy2(previous_db, output_path)
-        conn = sqlite3.connect(output_path)
-        # Ensure all schema tables exist (handles new tables added since
-        # the previous build — they'll be empty but present)
-        _ensure_all_tables_exist(conn, schema, all_table_names)
-        logger.info("Reusing %s from previous build (retaining tag/precompute tables)", output_path)
-    else:
-        if previous_db:
-            logger.info("Falling back to fresh-create — previous DB not compatible")
-        else:
-            logger.info("Fresh merge: no previous DB provided")
+    # Remove existing output file
+    if os.path.exists(output_path):
+        os.remove(output_path)
 
-        # Remove existing output file
-        if os.path.exists(output_path):
-            os.remove(output_path)
-
-        # Create goveye.db with ALL tables + FTS triggers + room_master_table
-        conn = schema_module.create_database_with_tables(
-            output_path, schema_path, all_table_names
-        )
-        logger.info("Created %s with %d tables", output_path, len(all_table_names))
+    # Create goveye.db with ALL tables + FTS triggers + room_master_table
+    conn = schema_module.create_database_with_tables(
+        output_path, schema_path, all_table_names
+    )
+    logger.info("Created %s with %d tables", output_path, len(all_table_names))
 
     # Map argument names to provided paths
     source_dbs = {
@@ -376,10 +268,6 @@ def main():
     parser.add_argument("--written-statements-db", default=None, help="Path to written_statements.db")
     parser.add_argument("--legislation-db", default=None, help="Path to legislation.db")
     parser.add_argument("--written-questions-db", default=None, help="Path to written_questions.db")
-    parser.add_argument("--previous-db", default=None,
-                        help="Path to previous goveye.db for incremental merge. "
-                             "If provided and schema-compatible, only changed per-API "
-                             "tables are replaced; tag/precompute tables are retained.")
     args = parser.parse_args()
 
     merge_dbs(
@@ -405,7 +293,6 @@ def main():
         written_statements_db=args.written_statements_db,
         legislation_db=args.legislation_db,
         written_questions_db=args.written_questions_db,
-        previous_db=args.previous_db,
     )
 
 

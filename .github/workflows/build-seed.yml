@@ -244,48 +244,26 @@ jobs:
           fi
           echo "Per-API DB verification complete."
 
-      - name: Download previous goveye.db (for incremental merge)
+      - name: Download previous tags.db (for incremental tag processing)
         if: steps.check.outputs.needs_update == 'true'
-        id: download_prev
+        id: download_prev_tags
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Only use previous DB for incremental merge if the seed was built
-          # recently (within 3 days). After a long gap, too many rows are new
-          # and incremental is slower than fresh create.
-          if [ -f seed-manifest.json ]; then
-            GENERATED=$(python -c "import json; from datetime import datetime, timezone; d=json.load(open('seed-manifest.json')); print(d.get('generatedAt',''))" 2>/dev/null || echo "")
-            if [ -n "$GENERATED" ]; then
-              AGE_DAYS=$(python -c "from datetime import datetime, timezone; d=datetime.fromisoformat('$GENERATED'.replace('Z','+00:00')); print((datetime.now(timezone.utc)-d).days)" 2>/dev/null || echo "999")
-              echo "age_days=$AGE_DAYS"
-              if [ "$AGE_DAYS" -gt 3 ]; then
-                echo "Previous seed is $AGE_DAYS days old — too stale for incremental, will fresh-create"
-                exit 0
-              fi
-            fi
-          fi
-          gh release download seed-latest --pattern goveye.db --output prev_goveye.db --clobber || echo "No previous goveye.db (first run or download failed — will fresh-create)"
-          # Verify the downloaded DB is valid and has tag tables
-          if [ -f prev_goveye.db ]; then
-            TAG_COUNT=$(python -c "import sqlite3; c=sqlite3.connect('prev_goveye.db'); print(c.execute('SELECT COUNT(*) FROM division_tags').fetchone()[0]); c.close()" 2>/dev/null || echo "0")
-            echo "Previous DB division_tags count: $TAG_COUNT"
-            if [ "$TAG_COUNT" -eq 0 ]; then
-              echo "Previous DB has no division_tags — removing it (will fresh-create)"
-              rm -f prev_goveye.db
-            fi
+          # Download the small (~4MB) tags.db from the previous seed-latest release.
+          # This contains the 8 tag/source_rec tables from the previous build,
+          # enabling incremental tag processing (only new rows get tagged).
+          gh release download seed-latest --pattern tags.db --output prev_tags.db --clobber || echo "No previous tags.db (first run or download failed — will full-rebuild tags)"
+          if [ -f prev_tags.db ]; then
+            echo "Downloaded prev_tags.db ($(du -h prev_tags.db | cut -f1))"
+          else
+            echo "No prev_tags.db — tag scripts will do full rebuild"
           fi
 
       - name: Merge per-API DBs into goveye.db
         if: steps.check.outputs.needs_update == 'true'
         run: |
-          PREV_DB_ARG=""
-          if [ -f prev_goveye.db ]; then
-            PREV_DB_ARG="--previous-db prev_goveye.db"
-            echo "Using previous goveye.db for incremental merge"
-          else
-            echo "No previous DB — fresh create"
-          fi
           python merge_dbs.py --output goveye.db --schema schemas/bundled_schema.json \
             --mps-db per-api-cache/mps.db --commons-votes-db per-api-cache/commons_votes.db \
             --lords-votes-db per-api-cache/lords_votes.db --bills-db per-api-cache/bills.db \
@@ -299,8 +277,20 @@ jobs:
             --gov-publications-db per-api-cache/gov_publications.db \
             --written-statements-db per-api-cache/written_statements.db \
             --written-questions-db per-api-cache/written_questions.db \
-            --legislation-db per-api-cache/legislation.db \
-            $PREV_DB_ARG
+            --legislation-db per-api-cache/legislation.db
+
+      - name: Restore tag tables from previous tags.db
+        if: steps.check.outputs.needs_update == 'true'
+        id: restore_tags
+        continue-on-error: true
+        run: |
+          if [ -f prev_tags.db ]; then
+            python restore_tags.py --output goveye.db --tags-db prev_tags.db --schema schemas/bundled_schema.json
+            echo "tags_restored=true" >> $GITHUB_OUTPUT
+          else
+            echo "No prev_tags.db — skipping restore (full tag rebuild)"
+            echo "tags_restored=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Precompute stats tables (mp_stats + peer_averages)
         if: steps.check.outputs.needs_update == 'true'
@@ -315,9 +305,11 @@ jobs:
           CHANGED_APIS: ${{ steps.check.outputs.changed_apis }}
         run: |
           INCREMENTAL=""
-          if [ -f prev_goveye.db ]; then
+          if [ "${{ steps.restore_tags.outputs.tags_restored }}" = "true" ]; then
             INCREMENTAL="--incremental"
-            echo "Incremental tag build (previous DB available)"
+            echo "Incremental tag build (tags restored from previous build)"
+          else
+            echo "Full tag rebuild (no previous tags)"
           fi
           python build_tags.py --output goveye.db --schema schemas/bundled_schema.json --changed-apis "$CHANGED_APIS" $INCREMENTAL
 
@@ -325,9 +317,11 @@ jobs:
         if: steps.check.outputs.needs_update == 'true' && success()
         run: |
           INCREMENTAL=""
-          if [ -f prev_goveye.db ]; then
+          if [ "${{ steps.restore_tags.outputs.tags_restored }}" = "true" ]; then
             INCREMENTAL="--incremental"
-            echo "Incremental MP tag build (previous DB available)"
+            echo "Incremental MP tag build (tags restored from previous build)"
+          else
+            echo "Full MP tag rebuild (no previous tags)"
           fi
           python build_mp_tags.py --output goveye.db --schema schemas/bundled_schema.json $INCREMENTAL
 
@@ -383,6 +377,11 @@ jobs:
             --written-questions-manifest written_questions_manifest.json \
             --legislation-manifest legislation_manifest.json
 
+      - name: Extract tags.db for incremental builds
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          python extract_tags.py --input goveye.db --output tags.db
+
       - name: Publish to GitHub Releases
         if: steps.check.outputs.needs_update == 'true'
         uses: softprops/action-gh-release@v3
@@ -398,6 +397,9 @@ jobs:
               from 2000-2026 via mySociety + government publications + written
               statements + legislation + MP tags + party leaders + source
               recommendations)
+            - **tags.db**: Small (~4MB) SQLite file with the 8 derived tag tables
+              (division_tags, bill_tags, mp_tags, etc.) for incremental tag
+              processing in the next seed build
             - **seed-manifest.json**: Per-API dbHash tracking for incremental seed
               updates (19 per-API hashes + code hashes for build scripts)
 
@@ -406,6 +408,7 @@ jobs:
             changes (checked every 6 hours).
           files: |
             goveye.db
+            tags.db
             seed-manifest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

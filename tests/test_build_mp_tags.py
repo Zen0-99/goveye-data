@@ -1,8 +1,9 @@
-"""Unit tests for build_mp_tags.py — MP tag aggregation with recency weighting.
+"""Unit tests for build_mp_tags.py — MP tag aggregation with frequency + recency weighting.
 
 Tests:
 - build_tags.py can be imported and TAG_DICTIONARY has 26 entries
 - Recency weighting: recent speech has higher hitCount than old speech for same tag
+- Frequency dominance: MP with many old speeches outscores MP with few recent speeches
 - memberId=0 speeches are skipped
 - isIntervention=1 speeches are skipped
 - mp_tags table is populated with correct composite PK
@@ -156,16 +157,22 @@ class TestBuildMpTags(unittest.TestCase):
         self.assertGreater(cursor.fetchone()[0], 0)
 
     def test_recency_weighting(self):
-        """Recent speech has higher hitCount than old speech for the same tag (D-08)."""
+        """Recent speech has higher hitCount than old speech for the same tag."""
+        # Use a text with many NHS keyword hits so the recency difference
+        # survives int() truncation.
+        nhs_text = ("The NHS hospital GP ambulance A&E waiting list "
+                    "NHS trust integrated care NHS hospital GP "
+                    "NHS funding for hospital GP services")
+
         # MP 1: recent speech about NHS
         recent_date = (datetime.date.today() - datetime.timedelta(days=10)).isoformat()
         self._insert_division(1, recent_date)
-        self._insert_speech("s1", 1, 200, "The NHS needs more funding for hospitals and GP services.")
+        self._insert_speech("s1", 1, 200, nhs_text)
 
         # MP 2: old speech about NHS (same content, different member)
         old_date = (datetime.date.today() - datetime.timedelta(days=700)).isoformat()
         self._insert_division(2, old_date)
-        self._insert_speech("s2", 2, 201, "The NHS needs more funding for hospitals and GP services.")
+        self._insert_speech("s2", 2, 201, nhs_text)
 
         scores = build_mp_tags.build_mp_tags(self.conn)
         build_mp_tags.populate_mp_tags(self.conn, scores)
@@ -180,7 +187,41 @@ class TestBuildMpTags(unittest.TestCase):
         self.assertIsNotNone(recent_row, "Recent MP should have an NHS tag")
         self.assertIsNotNone(old_row, "Old MP should have an NHS tag")
         self.assertGreater(recent_row[0], old_row[0],
-                           "Recent speech hitCount must be higher than old speech (D-08 recency weighting)")
+                           "Recent speech hitCount must be higher than old speech (recency weighting)")
+
+    def test_frequency_dominance(self):
+        """MP with many old speeches outscores MP with few recent speeches.
+
+        The frequency base (70%) ensures that volume of expertise dominates
+        over recency. An MP with 10 old speeches should outscore an MP with
+        1 recent speech on the same topic.
+        """
+        # MP 1: 10 old speeches about NHS (2 years ago)
+        old_date = (datetime.date.today() - datetime.timedelta(days=730)).isoformat()
+        self._insert_division(1, old_date)
+        for i in range(10):
+            self._insert_speech(f"f{i}", 1, 500,
+                                "The NHS needs more funding for hospitals and GP services.")
+
+        # MP 2: 1 recent speech about NHS
+        recent_date = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        self._insert_division(2, recent_date)
+        self._insert_speech("r1", 2, 501,
+                            "The NHS needs more funding for hospitals and GP services.")
+
+        scores = build_mp_tags.build_mp_tags(self.conn)
+        build_mp_tags.populate_mp_tags(self.conn, scores)
+
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT hitCount FROM mp_tags WHERE memberId = 500 AND tag = 'NHS'")
+        frequent_row = cursor.fetchone()
+        cursor.execute("SELECT hitCount FROM mp_tags WHERE memberId = 501 AND tag = 'NHS'")
+        recent_row = cursor.fetchone()
+
+        self.assertIsNotNone(frequent_row, "Frequent MP should have an NHS tag")
+        self.assertIsNotNone(recent_row, "Recent MP should have an NHS tag")
+        self.assertGreater(frequent_row[0], recent_row[0],
+                           "MP with 10 old speeches must outscore MP with 1 recent speech (frequency dominance)")
 
     def test_member_id_zero_skipped(self):
         """Speeches with memberId=0 are skipped (unmatched speeches)."""
