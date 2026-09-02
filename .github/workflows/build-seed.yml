@@ -266,6 +266,15 @@ jobs:
             fi
           fi
           gh release download seed-latest --pattern goveye.db --output prev_goveye.db --clobber || echo "No previous goveye.db (first run or download failed — will fresh-create)"
+          # Verify the downloaded DB is valid and has tag tables
+          if [ -f prev_goveye.db ]; then
+            TAG_COUNT=$(python -c "import sqlite3; c=sqlite3.connect('prev_goveye.db'); print(c.execute('SELECT COUNT(*) FROM division_tags').fetchone()[0]); c.close()" 2>/dev/null || echo "0")
+            echo "Previous DB division_tags count: $TAG_COUNT"
+            if [ "$TAG_COUNT" -eq 0 ]; then
+              echo "Previous DB has no division_tags — removing it (will fresh-create)"
+              rm -f prev_goveye.db
+            fi
+          fi
 
       - name: Merge per-API DBs into goveye.db
         if: steps.check.outputs.needs_update == 'true'
