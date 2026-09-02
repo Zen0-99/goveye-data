@@ -916,9 +916,9 @@ def main():
     # so counts reflect the complete dataset.
     if args.incremental:
         # Read all existing tags to rebuild metadata counts
-        cursor.execute("SELECT divisionId, tag FROM division_tags")
+        cursor.execute("SELECT divisionId, tag, hitCount FROM division_tags")
         all_div_tags = cursor.fetchall()
-        cursor.execute("SELECT billId, tag FROM bill_tags")
+        cursor.execute("SELECT billId, tag, hitCount FROM bill_tags")
         all_bill_tags = cursor.fetchall()
         build_tag_metadata(conn, all_div_tags, all_bill_tags,
                            publication_tag_rows, statement_tag_rows,
