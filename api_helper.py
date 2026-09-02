@@ -19,7 +19,7 @@ import requests
 
 API_DELAY = 0.2  # seconds between API calls for rate limiting (A3)
 API_TIMEOUT = 60  # seconds — Lords API is slow, 30s wasn't enough
-API_MAX_RETRIES = 3  # retry on timeout/connection error
+API_MAX_RETRIES = 5  # retry on timeout/connection error/5xx (Parliament API transient 500s)
 BATCH_SIZE = 1000  # rows per transaction for batch inserts (Pitfall 7)
 
 logging.basicConfig(
@@ -29,7 +29,7 @@ logging.basicConfig(
 logger = logging.getLogger("goveye_build")
 
 
-def api_get(url, params=None, timeout=60, max_retries=3):
+def api_get(url, params=None, timeout=60, max_retries=5):
     """GET with retry logic. Retries on timeout and connection errors.
 
     Args:
@@ -70,17 +70,10 @@ def api_get(url, params=None, timeout=60, max_retries=3):
             if e.response.status_code < 500:
                 raise
             last_exc = e
-            wait = 2 ** attempt
+            wait = 2 ** attempt  # exponential backoff: 1s, 2s, 4s
             logger.warning(
                 "API retry %d/%d for %s (waiting %ds): HTTP %d",
                 attempt + 1, max_retries, url, wait, e.response.status_code,
-            )
-            time.sleep(wait)
-            last_exc = e
-            wait = 2 ** attempt  # exponential backoff: 1s, 2s, 4s
-            logger.warning(
-                "API retry %d/%d for %s (waiting %ds): %s",
-                attempt + 1, max_retries, url, wait, type(e).__name__,
             )
             time.sleep(wait)
     raise last_exc

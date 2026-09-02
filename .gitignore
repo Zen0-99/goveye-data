@@ -2,9 +2,18 @@ __pycache__/
 *.pyc
 *.pyo
 *.db
+*.db.bak*
 .env
 .venv/
 venv/
 # Build artifacts
 manifest.json
 patch.json
+seed-manifest.json
+# Temp scripts
+fetch_legislation_text.py
+rebuild_pub_tags.py
+revert_images.py
+update_bodytext_format.py
+update_seed_v25.py
+upgrade_images.py

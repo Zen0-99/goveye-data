@@ -228,21 +228,21 @@ jobs:
           download_if_missing written_questions.db written-questions-latest
           download_if_missing legislation.db legislation-latest
 
-      - name: Verify all 20 DBs present
+      - name: Verify per-API DBs present (warn on missing)
         if: steps.check.outputs.needs_update == 'true'
         run: |
           missing=0
           for db in mps.db commons_votes.db lords_votes.db bills.db committees.db recess.db interests.db party_stats.db bio_data.db expenses.db mp_links.db manifestos.db historical_members.db debates.db member_details.db hansard.db gov_publications.db written_statements.db written_questions.db legislation.db; do
             if [ ! -f "per-api-cache/$db" ]; then
-              echo "ERROR: $db is missing — cannot build a complete seed"
+              echo "WARNING: $db is missing — seed will have empty tables for this stream"
               missing=1
             fi
           done
           if [ "$missing" -eq 1 ]; then
-            echo "One or more per-API DBs are missing. Ensure all per-API workflows have completed at least one successful run before building the seed."
-            exit 1
+            echo "Some per-API DBs are missing. The seed will be built with empty tables for those streams."
+            echo "The app's patch system will populate them when the per-API workflow succeeds and publishes a patch."
           fi
-          echo "All 20 per-API DBs present."
+          echo "Per-API DB verification complete."
 
       - name: Merge per-API DBs into goveye.db
         if: steps.check.outputs.needs_update == 'true'

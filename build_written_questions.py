@@ -33,6 +33,9 @@ import os
 import shutil
 import sqlite3
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import requests
 
 import schema as schema_module
 from api_helper import BATCH_SIZE, logger, api_get
@@ -41,7 +44,7 @@ from api_helper import BATCH_SIZE, logger, api_get
 
 QUESTIONS_API = "https://questions-statements-api.parliament.uk/api/writtenquestions/questions"
 TABLE_NAMES = ["written_questions"]
-API_BATCH_SIZE = 100  # questions per API page (skip/take pagination)
+API_BATCH_SIZE = 500  # questions per API page (skip/take pagination)
 
 
 # --- Written Questions API ---
@@ -69,43 +72,131 @@ def fetch_full_question_text(question_id):
         return ""
 
 
-def fetch_written_questions():
-    """Fetch all written questions from the Parliament Written Questions API.
+def _parse_question(val):
+    """Parse a single question dict from the API response."""
+    return {
+        "id": val.get("id"),
+        "askingMemberId": val.get("askingMemberId"),
+        "uin": val.get("uin", ""),
+        "dateTabled": val.get("dateTabled", ""),
+        "answeringBodyId": val.get("answeringBodyId"),
+        "answeringBodyName": val.get("answeringBodyName", ""),
+        "questionText": val.get("questionText", ""),
+        "house": val.get("house", 1),
+    }
 
-    The API uses skip/take pagination (not date range like statements).
-    Each page returns up to API_BATCH_SIZE results. Both Commons and Lords
-    questions are returned (the house field distinguishes them).
 
-    Returns:
-        List of question dicts with keys: id, askingMemberId, uin,
-        dateTabled, answeringBodyId, answeringBodyName, questionText, house.
+def fetch_questions_for_mp(mp_id):
+    """Fetch all written questions for a single MP using askingMemberId filter.
+
+    This avoids the deep-pagination 500 errors that occur when fetching all
+    questions with large skip values. Each MP typically has a few hundred
+    questions, so skip values stay small.
+
+    Returns a list of question dicts.
     """
-    all_questions = []
+    questions = []
     skip = 0
-    logger.info("Fetching written questions from API (paginated, take=%d)", API_BATCH_SIZE)
     while True:
-        params = {"skip": skip, "take": API_BATCH_SIZE}
-        r = api_get(QUESTIONS_API, params=params, timeout=60)
+        params = {"skip": skip, "take": API_BATCH_SIZE, "askingMemberId": mp_id}
+        try:
+            r = api_get(QUESTIONS_API, params=params, timeout=60)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code >= 500:
+                logger.warning("Skipping page for MP %d at skip=%d (persistent 5xx)",
+                               mp_id, skip)
+                break
+            raise
         data = r.json()
         results = data.get("results", [])
         if not results:
             break
         for item in results:
             val = item.get("value", {})
-            all_questions.append({
-                "id": val.get("id"),
-                "askingMemberId": val.get("askingMemberId"),
-                "uin": val.get("uin", ""),
-                "dateTabled": val.get("dateTabled", ""),
-                "answeringBodyId": val.get("answeringBodyId"),
-                "answeringBodyName": val.get("answeringBodyName", ""),
-                "questionText": val.get("questionText", ""),
-                "house": val.get("house", 1),
-            })
+            questions.append(_parse_question(val))
+        if len(results) < API_BATCH_SIZE:
+            break
+        skip += API_BATCH_SIZE
+    return questions
+
+
+def fetch_written_questions(mp_ids=None):
+    """Fetch all written questions from the Parliament Written Questions API.
+
+    If mp_ids is provided, fetches questions per-MP using the askingMemberId
+    filter (avoids deep-pagination 500 errors). Uses a thread pool for
+    parallelism.
+
+    If mp_ids is None, falls back to unfiltered deep pagination (legacy,
+    prone to 500 errors on large skips).
+
+    Args:
+        mp_ids: Optional set of MP IDs to fetch questions for.
+
+    Returns:
+        List of question dicts with keys: id, askingMemberId, uin,
+        dateTabled, answeringBodyId, answeringBodyName, questionText, house.
+    """
+    if mp_ids is None:
+        return _fetch_written_questions_legacy()
+
+    all_questions = []
+    mp_list = sorted(mp_ids)
+    logger.info("Fetching written questions for %d MPs (parallel, take=%d)",
+                len(mp_list), API_BATCH_SIZE)
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_mp = {
+            executor.submit(fetch_questions_for_mp, mp_id): mp_id
+            for mp_id in mp_list
+        }
+        for future in as_completed(future_to_mp):
+            mp_id = future_to_mp[future]
+            try:
+                questions = future.result()
+                all_questions.extend(questions)
+                if questions:
+                    logger.info("MP %d: %d questions (total so far: %d)",
+                                mp_id, len(questions), len(all_questions))
+            except Exception as e:
+                logger.error("Failed to fetch questions for MP %d: %s", mp_id, e)
+
+    logger.info("Fetched %d written questions total (from %d MPs)",
+                len(all_questions), len(mp_list))
+    return all_questions
+
+
+def _fetch_written_questions_legacy():
+    """Legacy fetch: unfiltered deep pagination (prone to 500 errors)."""
+    all_questions = []
+    skip = 0
+    skipped_pages = 0
+    logger.info("Fetching written questions from API (paginated, take=%d)", API_BATCH_SIZE)
+    while True:
+        params = {"skip": skip, "take": API_BATCH_SIZE}
+        try:
+            r = api_get(QUESTIONS_API, params=params, timeout=60)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code >= 500:
+                logger.error("Skipping page at skip=%d (persistent 5xx)", skip)
+                skipped_pages += 1
+                skip += API_BATCH_SIZE
+                continue
+            raise
+        data = r.json()
+        results = data.get("results", [])
+        if not results:
+            break
+        for item in results:
+            val = item.get("value", {})
+            all_questions.append(_parse_question(val))
         logger.info("Fetched %d questions (total so far: %d)", len(results), len(all_questions))
         if len(results) < API_BATCH_SIZE:
             break
         skip += API_BATCH_SIZE
+    if skipped_pages:
+        logger.warning("Skipped %d pages due to persistent 5xx errors (~%d questions lost)",
+                       skipped_pages, skipped_pages * API_BATCH_SIZE)
     logger.info("Fetched %d written questions total", len(all_questions))
     return all_questions
 
@@ -199,26 +290,51 @@ def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=No
     mp_ids = fetch_all_mps_from_db(mps_db)
     logger.info("Loaded %d MP IDs from %s for filtering", len(mp_ids), mps_db)
 
-    questions = fetch_written_questions()
+    # Fetch questions per-MP (avoids deep-pagination 500 errors)
+    questions = fetch_written_questions(mp_ids=mp_ids)
 
-    # Filter to only questions from MPs in mps.db
-    filtered = [q for q in questions if q.get("askingMemberId") in mp_ids]
-    logger.info("Filtered to %d questions from known MPs (from %d total)", len(filtered), len(questions))
+    # Questions are already filtered to known MPs by the API
+    filtered = questions
+    logger.info("Fetched %d questions from known MPs", len(filtered))
 
     if mp_limit:
         filtered = filtered[:mp_limit]
 
-    # Pitfall 4: fetch full text for truncated questions
-    for q in filtered:
-        question_text = q.get("questionText", "")
-        if len(question_text) == 255:
-            logger.info("Question %s text truncated at 255 chars — fetching full text", q.get("id"))
-            full_text = fetch_full_question_text(q["id"])
-            if full_text:
-                q["questionText"] = full_text
-
+    # Save all questions immediately (with truncated text) to prevent data loss
     if filtered:
         insert_questions(conn, filtered, timestamp_millis)
+        logger.info("Saved %d questions to DB (truncated text pending for some)", len(filtered))
+
+    # Pitfall 4: fetch full text for truncated questions (parallelised)
+    # and update the DB incrementally as each full text arrives
+    truncated = [q for q in filtered if len(q.get("questionText", "")) == 255]
+    logger.info("Fetching full text for %d truncated questions (parallel, 10 workers)",
+                len(truncated))
+
+    update_sql = "UPDATE written_questions SET questionText = ? WHERE id = ?"
+    done_count = 0
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_q = {
+            executor.submit(fetch_full_question_text, q["id"]): q
+            for q in truncated
+        }
+        for future in as_completed(future_to_q):
+            q = future_to_q[future]
+            try:
+                full_text = future.result()
+                if full_text:
+                    q["questionText"] = full_text
+                    conn.execute(update_sql, (full_text, q["id"]))
+                    conn.commit()
+            except Exception as e:
+                logger.warning("Failed to fetch full text for question %s: %s", q.get("id"), e)
+            done_count += 1
+            if done_count % 100 == 0:
+                logger.info("Full text progress: %d/%d (%.0f%%)",
+                            done_count, len(truncated),
+                            100.0 * done_count / len(truncated))
+
+    logger.info("Full text fetching complete: %d/%d done", done_count, len(truncated))
 
     logger.info("VACUUMing database to minimize file size...")
     conn.execute("VACUUM")
@@ -244,26 +360,51 @@ def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None):
     mp_ids = fetch_all_mps_from_db(mps_db)
     logger.info("Loaded %d MP IDs from %s for filtering", len(mp_ids), mps_db)
 
-    questions = fetch_written_questions()
+    # Fetch questions per-MP (avoids deep-pagination 500 errors)
+    questions = fetch_written_questions(mp_ids=mp_ids)
 
-    # Filter to only questions from MPs in mps.db
-    filtered = [q for q in questions if q.get("askingMemberId") in mp_ids]
-    logger.info("Filtered to %d questions from known MPs (from %d total)", len(filtered), len(questions))
+    # Questions are already filtered to known MPs by the API
+    filtered = questions
+    logger.info("Fetched %d questions from known MPs", len(filtered))
 
     if mp_limit:
         filtered = filtered[:mp_limit]
 
-    # Pitfall 4: fetch full text for truncated questions
-    for q in filtered:
-        question_text = q.get("questionText", "")
-        if len(question_text) == 255:
-            logger.info("Question %s text truncated at 255 chars — fetching full text", q.get("id"))
-            full_text = fetch_full_question_text(q["id"])
-            if full_text:
-                q["questionText"] = full_text
-
+    # Save all questions immediately (with truncated text) to prevent data loss
     if filtered:
         insert_questions(conn, filtered, timestamp_millis)
+        logger.info("Saved %d questions to DB (truncated text pending for some)", len(filtered))
+
+    # Pitfall 4: fetch full text for truncated questions (parallelised)
+    # and update the DB incrementally as each full text arrives
+    truncated = [q for q in filtered if len(q.get("questionText", "")) == 255]
+    logger.info("Fetching full text for %d truncated questions (parallel, 10 workers)",
+                len(truncated))
+
+    update_sql = "UPDATE written_questions SET questionText = ? WHERE id = ?"
+    done_count = 0
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_q = {
+            executor.submit(fetch_full_question_text, q["id"]): q
+            for q in truncated
+        }
+        for future in as_completed(future_to_q):
+            q = future_to_q[future]
+            try:
+                full_text = future.result()
+                if full_text:
+                    q["questionText"] = full_text
+                    conn.execute(update_sql, (full_text, q["id"]))
+                    conn.commit()
+            except Exception as e:
+                logger.warning("Failed to fetch full text for question %s: %s", q.get("id"), e)
+            done_count += 1
+            if done_count % 100 == 0:
+                logger.info("Full text progress: %d/%d (%.0f%%)",
+                            done_count, len(truncated),
+                            100.0 * done_count / len(truncated))
+
+    logger.info("Full text fetching complete: %d/%d done", done_count, len(truncated))
 
     logger.info("VACUUMing database to minimize file size...")
     conn.execute("VACUUM")
