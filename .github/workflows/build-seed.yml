@@ -11,7 +11,7 @@ permissions:
 jobs:
   build-seed:
     runs-on: ubuntu-latest
-    timeout-minutes: 45  # One-time full rebuild after 11-day gap; revert to 20 after
+    timeout-minutes: 45  # Incremental: ~2-3 min. Full rebuild fallback: ~35 min (after >3 day gap or schema change)
 
     steps:
       - uses: actions/checkout@v4
