@@ -37,7 +37,14 @@ logger = logging.getLogger("check_seed")
 
 # Scripts tracked in seed-manifest.json's codeHashes. If any of these change,
 # the seed is rebuilt with all APIs marked as changed (forcing full precompute + tags).
-TRACKED_SCRIPTS = ["build_precompute.py", "build_tags.py"]
+TRACKED_SCRIPTS = [
+    "build_precompute.py",
+    "build_tags.py",
+    "build_mp_tags.py",
+    "merge_dbs.py",
+    "extract_tags.py",
+    "restore_tags.py",
+]
 
 
 def compute_file_hash(path):

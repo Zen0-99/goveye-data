@@ -80,7 +80,14 @@ def load_manifest(path):
 # Scripts whose code changes should trigger a seed rebuild even if no
 # per-API data changed. check_seed.py compares these hashes against the
 # stored values in seed-manifest.json.
-TRACKED_SCRIPTS = ["build_precompute.py", "build_tags.py"]
+TRACKED_SCRIPTS = [
+    "build_precompute.py",
+    "build_tags.py",
+    "build_mp_tags.py",
+    "merge_dbs.py",
+    "extract_tags.py",
+    "restore_tags.py",
+]
 
 
 def compute_file_hash(path):
@@ -123,7 +130,7 @@ def generate_seed_manifest(output_path, per_api_manifest_paths,
             logger.info("  %s: %s", api_key,
                         api_hashes[api_key][:12] if api_hashes[api_key] else "none")
 
-    # Compute code hashes for tracked scripts (build_precompute.py, build_tags.py).
+    # Compute code hashes for tracked scripts.
     # If these scripts change but no per-API data changed, check_seed.py will
     # detect the hash difference and force a full rebuild.
     code_hashes = {}
