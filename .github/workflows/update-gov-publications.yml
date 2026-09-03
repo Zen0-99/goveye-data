@@ -75,6 +75,10 @@ jobs:
         run: |
           python build_gov_publications.py --output gov_publications.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_gov_publications.db
 
+      - name: Fill missing organisation images from Wikipedia
+        run: |
+          python build_org_images.py --db gov_publications.db
+
       - name: Save seed checkpoint
         if: steps.download_prev.outputs.has_previous != 'true' && always()
         uses: actions/cache@v4
