@@ -84,7 +84,7 @@ def make_pk_key(row, pk_columns):
     return tuple(row.get(col) for col in pk_columns)
 
 
-def diff_table(new_conn, prev_conn, table_name, pk_columns):
+def diff_table(new_conn, prev_conn, table_name, pk_columns, full_upsert=False):
     """Compute upsert and delete arrays for a single table.
 
     Args:
@@ -92,11 +92,18 @@ def diff_table(new_conn, prev_conn, table_name, pk_columns):
         prev_conn: Connection to the previous DB (or None for first run).
         table_name: The table to diff.
         pk_columns: List of primary key column names.
+        full_upsert: If True, include ALL rows as upserts (no diffing, no
+            deletes). Used for one-time backfill patches where existing
+            device rows need to be overwritten (e.g. imageUrl backfill).
 
     Returns:
         Dict with "upsert" and "delete" arrays.
     """
     new_rows = get_table_rows(new_conn, table_name)
+
+    # Full upsert mode: all rows are upserts, no deletes
+    if full_upsert:
+        return {"upsert": new_rows, "delete": []}
 
     # First run: no previous DB — all rows are upserts
     if prev_conn is None:
@@ -134,7 +141,7 @@ def diff_table(new_conn, prev_conn, table_name, pk_columns):
 
 
 def generate_diff(new_db_path, previous_db_path, schema_path, output_path,
-                  tables=None):
+                  tables=None, full_upsert_tables=None):
     """Generate a JSON diff patch comparing new DB vs previous DB.
 
     Args:
@@ -145,6 +152,9 @@ def generate_diff(new_db_path, previous_db_path, schema_path, output_path,
         tables: Optional list of table names to diff (D-10). If provided,
             only those tables are diffed instead of all 16. The SKIP_TABLES
             set still applies (mps_fts is always skipped — auto-synced).
+        full_upsert_tables: Optional set of table names to force full upsert
+            (all rows as upserts, no deletes). Used for one-time backfill
+            patches.
     """
     schema = schema_module.load_schema(schema_path)
     schema_version = schema_module.get_version(schema)
@@ -164,12 +174,15 @@ def generate_diff(new_db_path, previous_db_path, schema_path, output_path,
         prev_conn.row_factory = sqlite3.Row
 
     changes = {}
+    full_upsert_set = full_upsert_tables or set()
     for table_name in sorted(table_names):
         if table_name in SKIP_TABLES:
             continue
 
         pk_columns = TABLE_PRIMARY_KEYS.get(table_name, ["id"])
-        result = diff_table(new_conn, prev_conn, table_name, pk_columns)
+        is_full = table_name in full_upsert_set
+        result = diff_table(new_conn, prev_conn, table_name, pk_columns,
+                            full_upsert=is_full)
         changes[table_name] = result
 
         if result["upsert"] or result["delete"]:
@@ -221,10 +234,20 @@ def main():
         help="Comma-separated list of tables to diff (e.g. mps,mps_fts). "
              "If omitted, diffs all tables.",
     )
+    parser.add_argument(
+        "--full-upsert-tables", default=None,
+        help="Comma-separated list of tables to force full upsert (all rows "
+             "as upserts, no deletes). Used for one-time backfill patches.",
+    )
     args = parser.parse_args()
 
     tables = args.tables.split(",") if args.tables else None
-    generate_diff(args.new, args.previous, args.schema, args.output, tables=tables)
+    full_upsert_tables = (
+        {t.strip() for t in args.full_upsert_tables.split(",") if t.strip()}
+        if args.full_upsert_tables else None
+    )
+    generate_diff(args.new, args.previous, args.schema, args.output,
+                  tables=tables, full_upsert_tables=full_upsert_tables)
 
 
 if __name__ == "__main__":

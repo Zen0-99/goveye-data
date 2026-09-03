@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '0 */6 * * *'  # 4x daily (every 6 hours)
   workflow_dispatch:      # Manual trigger for seed builds and testing
+    inputs:
+      full_upsert:
+        description: 'Generate full upsert patch (all rows, not just deltas) — use for one-time backfills'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write  # Required by softprops/action-gh-release@v3
@@ -99,7 +105,12 @@ jobs:
       - name: Generate diff patch
         if: steps.download_prev.outputs.has_previous == 'true'
         run: |
-          python diff_db.py --new gov_publications.db --previous prev_gov_publications.db --schema schemas/bundled_schema.json --output patch.json --tables government_publications
+          FULL_UPsert_FLAG=""
+          if [ "${{ github.event.inputs.full_upsert }}" = "true" ]; then
+            FULL_UPsert_FLAG="--full-upsert-tables government_publications"
+            echo "Generating FULL UPSERT patch (one-time backfill)"
+          fi
+          python diff_db.py --new gov_publications.db --previous prev_gov_publications.db --schema schemas/bundled_schema.json --output patch.json --tables government_publications $FULL_UPsert_FLAG
 
       - name: Generate diff patch (first run)
         if: steps.download_prev.outputs.has_previous != 'true'
