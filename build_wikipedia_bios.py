@@ -120,8 +120,12 @@ def fetch_wikipedia_extracts(titles: list[str]) -> dict[str, dict]:
     return result
 
 
-def build_wiki_bios(output_db: str, mps_db: str, goveye_db: str):
-    """Build the wiki_bios database from Wikipedia extracts."""
+def build_wiki_bios(output_db: str, mps_db: str, goveye_db: str, inplace: bool = False):
+    """Build the wiki_bios database from Wikipedia extracts.
+
+    If inplace=True, merges the Wikipedia bios directly into goveye.db,
+    updating mp_synopsis.synopsisText and mp_links.wikipediaUrl.
+    """
     # Read MP IDs and names from mps.db
     mps_conn = sqlite3.connect(mps_db)
     mps_conn.row_factory = sqlite3.Row
@@ -141,17 +145,22 @@ def build_wiki_bios(output_db: str, mps_db: str, goveye_db: str):
     goveye_conn.close()
     logger.info("Read %d existing synopses from %s", len(existing_synopses), goveye_db)
 
-    # Create output DB
-    out_conn = sqlite3.connect(output_db)
-    out_conn.execute("""
-        CREATE TABLE IF NOT EXISTS wiki_bios (
-            mpId INTEGER PRIMARY KEY,
-            bioText TEXT,
-            wikipediaUrl TEXT,
-            lastUpdated INTEGER NOT NULL
-        )
-    """)
-    out_conn.commit()
+    if inplace:
+        # Write directly into goveye.db
+        out_conn = sqlite3.connect(goveye_db)
+        logger.info("Inplace mode — merging Wikipedia bios directly into %s", goveye_db)
+    else:
+        # Create output DB
+        out_conn = sqlite3.connect(output_db)
+        out_conn.execute("""
+            CREATE TABLE IF NOT EXISTS wiki_bios (
+                mpId INTEGER PRIMARY KEY,
+                bioText TEXT,
+                wikipediaUrl TEXT,
+                lastUpdated INTEGER NOT NULL
+            )
+        """)
+        out_conn.commit()
 
     timestamp = int(time.time() * 1000)
     fetched = 0
@@ -187,10 +196,22 @@ def build_wiki_bios(output_db: str, mps_db: str, goveye_db: str):
                 logger.debug("  Short extract for MP %d (%s): %d chars", mp_id, title, len(bio_text))
                 continue
 
-            out_conn.execute(
-                "INSERT OR REPLACE INTO wiki_bios (mpId, bioText, wikipediaUrl, lastUpdated) VALUES (?, ?, ?, ?)",
-                (mp_id, bio_text, result["url"], timestamp),
-            )
+            if inplace:
+                # Update mp_synopsis with the richer Wikipedia extract
+                out_conn.execute(
+                    "UPDATE mp_synopsis SET synopsisText = ? WHERE mpId = ?",
+                    (bio_text, mp_id),
+                )
+                # Update mp_links with the Wikipedia URL
+                out_conn.execute(
+                    "UPDATE mp_links SET wikipediaUrl = ? WHERE mpId = ?",
+                    (result["url"], mp_id),
+                )
+            else:
+                out_conn.execute(
+                    "INSERT OR REPLACE INTO wiki_bios (mpId, bioText, wikipediaUrl, lastUpdated) VALUES (?, ?, ?, ?)",
+                    (mp_id, bio_text, result["url"], timestamp),
+                )
             fetched += 1
 
         out_conn.commit()
@@ -204,12 +225,13 @@ def main():
     parser = argparse.ArgumentParser(
         description="Build Wikipedia biography extracts for UK MPs."
     )
-    parser.add_argument("--output", default="wiki_bios.db", help="Output SQLite DB path")
+    parser.add_argument("--output", default="wiki_bios.db", help="Output SQLite DB path (ignored if --inplace)")
     parser.add_argument("--mps-db", required=True, help="Path to mps.db")
-    parser.add_argument("--goveye-db", required=True, help="Path to goveye.db (for existing synopses)")
+    parser.add_argument("--goveye-db", required=True, help="Path to goveye.db (for existing synopses, or target if --inplace)")
+    parser.add_argument("--inplace", action="store_true", help="Merge Wikipedia bios directly into goveye.db")
     args = parser.parse_args()
 
-    build_wiki_bios(args.output, args.mps_db, args.goveye_db)
+    build_wiki_bios(args.output, args.mps_db, args.goveye_db, inplace=args.inplace)
 
 
 if __name__ == "__main__":
