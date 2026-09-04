@@ -137,8 +137,23 @@ def parse_mnis_member(member_elem):
     except ValueError:
         return None
 
-    # Date of birth — child element <DateOfBirth>
+    # Date of birth — the MNIS API returns <DateOfBirth xsi:nil="true"/>
+    # for all MPs. As a fallback, extract DOB from the earliest
+    # <PreferredName><StartDate> which is the birth date (the name given
+    # at birth, with a start date = DOB and end date = when the name
+    # changed, e.g. upon marriage or honorific change).
     dob = _normalize_date(_text(member_elem, "DateOfBirth"))
+    if not dob:
+        preferred_names = member_elem.findall(".//PreferredName")
+        earliest_start = None
+        for pn in preferred_names:
+            start_text = _text(pn, "StartDate")
+            if start_text:
+                normalized = _normalize_date(start_text)
+                if normalized and (earliest_start is None or normalized < earliest_start):
+                    earliest_start = normalized
+        if earliest_start:
+            dob = earliest_start
 
     # Place of birth — nested in <BasicDetails>
     town_of_birth = None
