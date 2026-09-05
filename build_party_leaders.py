@@ -53,30 +53,31 @@ LEADER_TITLES = [
 
 # --- Fallback: hardcoded current party leaders (RESEARCH.md A6) ---
 # Used only when bio_data does not contain a leader-type post for a party.
-# partyId → (memberId, title). Member IDs are Parliament API member IDs.
-# These should be verified/updated periodically.
+# partyId → (memberId, title). Member IDs are Parliament API member IDs
+# (must exist in the mps table). These should be verified/updated periodically.
+# Last verified: 2026-09-03 against the mps table.
 HARDCODED_LEADERS = {
-    # Labour (15) — Keir Starmer, Prime Minister
-    15: (4513, "Prime Minister"),
-    # Conservative (4) — Leader of the Opposition
-    4: (4074, "Leader of the Opposition"),
+    # Labour (15) — Andy Burnham, Prime Minister (since 2026-07-20)
+    15: (1427, "Prime Minister"),
+    # Conservative (4) — Kemi Badenoch, Leader of the Opposition
+    4: (4597, "Leader of the Opposition"),
     # Liberal Democrats (17) — Ed Davey
-    17: (408, "Leader of the Liberal Democrats"),
-    # SNP (29) — Stephen Flynn (Westminster leader)
-    29: (4680, "Leader of the Scottish National Party"),
+    17: (188, "Leader of the Liberal Democrats"),
+    # SNP (29) — Pete Wishart (Westminster leader; Stephen Flynn not in mps
+    # table; John Swinney is an MSP not an MP)
+    29: (1440, "Leader of the Scottish National Party"),
     # DUP (7) — Gavin Robinson
-    7: (4840, "Leader of the Democratic Unionist Party"),
-    # Plaid Cymru (22) — Liz Saville Roberts
-    22: (4583, "Leader of Plaid Cymru"),
+    7: (4360, "Leader of the Democratic Unionist Party"),
+    # Plaid Cymru (22) — Liz Saville Roberts (Westminster leader; Rhun ap
+    # Iorwerth is the Senedd leader, not an MP)
+    22: (4521, "Leader of Plaid Cymru"),
     # Green Party (44) — Zack Polanski is the current leader (since Sept 2025)
-    # but is NOT an MP (London Assembly Member, twfyPersonId 26031). The
-    # party_leaders table references mps.id, so we use Adrian Ramsay (5320,
-    # former co-leader and current Green MP) as the fallback until Zack
-    # Polanski becomes an MP. The previous entry (5515) did not exist in the
-    # mps table — corrected to 5320.
+    # but is NOT an MP (London Assembly Member). The party_leaders table
+    # references mps.id, so we use Adrian Ramsay (5320, co-leader and current
+    # Green MP) as the fallback.
     44: (5320, "Leader of the Green Party"),
     # Reform UK (1036) — Nigel Farage
-    1036: (4981, "Leader of Reform UK"),
+    1036: (5091, "Leader of Reform UK"),
 }
 
 

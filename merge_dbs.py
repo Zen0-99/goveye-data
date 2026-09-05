@@ -73,7 +73,7 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
               manifestos_db=None, historical_members_db=None, debates_db=None,
               member_details_db=None, hansard_db=None, councils_db=None,
               gov_publications_db=None, written_statements_db=None,
-              legislation_db=None, written_questions_db=None):
+              legislation_db=None, written_questions_db=None, ages_db=None):
     """Merge per-API DBs into a single goveye.db.
 
     Always creates a fresh goveye.db with all tables from the schema.
@@ -236,6 +236,29 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
                             )
             src_conn.close()
 
+    # --- Post-merge: update bio_data.dateOfBirth from ages.db ---
+    # ages.db is built by build_ages.py (Wikidata lookup) and contains
+    # birth dates that the MNIS API doesn't provide. Update bio_data in-place.
+    if ages_db and os.path.exists(ages_db):
+        logger.info("Merging birth dates from ages.db...")
+        ages_conn = sqlite3.connect(ages_db)
+        ages_cursor = ages_conn.cursor()
+        # Reopen the destination connection (closed above)
+        dest_conn = sqlite3.connect(output_path)
+        ages_cursor.execute("SELECT mpId, dateOfBirth FROM mp_ages WHERE dateOfBirth IS NOT NULL")
+        age_rows = ages_cursor.fetchall()
+        updated = 0
+        for mp_id, dob in age_rows:
+            dest_conn.execute(
+                "UPDATE bio_data SET dateOfBirth = ? WHERE mpId = ?",
+                (dob, mp_id)
+            )
+            updated += 1
+        dest_conn.commit()
+        dest_conn.close()
+        ages_conn.close()
+        logger.info("Updated %d birth dates from ages.db", updated)
+
     conn.commit()
     conn.close()
     logger.info("Merge complete: %s", output_path)
@@ -268,6 +291,7 @@ def main():
     parser.add_argument("--written-statements-db", default=None, help="Path to written_statements.db")
     parser.add_argument("--legislation-db", default=None, help="Path to legislation.db")
     parser.add_argument("--written-questions-db", default=None, help="Path to written_questions.db")
+    parser.add_argument("--ages-db", default=None, help="Path to ages.db (Wikidata birth dates)")
     args = parser.parse_args()
 
     merge_dbs(
@@ -293,6 +317,7 @@ def main():
         written_statements_db=args.written_statements_db,
         legislation_db=args.legislation_db,
         written_questions_db=args.written_questions_db,
+        ages_db=args.ages_db,
     )
 
 

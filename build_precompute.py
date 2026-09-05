@@ -32,6 +32,7 @@ Usage:
 """
 
 import argparse
+import datetime
 import json
 import logging
 import os
@@ -45,11 +46,19 @@ logging.basicConfig(
 logger = logging.getLogger("build_precompute")
 
 # ActivityScoreCalculator weights (must match ActivityScoreCalculator.kt)
-# Score is 0.0-10.0: votes 4.0, questions 2.0, speeches 2.0, committees 2.0
-VOTE_WEIGHT = 4.0
-QUESTIONS_WEIGHT = 2.0
-SPEECHES_WEIGHT = 2.0
+# Score is 0.0-10.0: votes 3.0, questions 2.5, speeches 2.5, committees 2.0
+# Self-performance scoring — no peer normalization.
+VOTE_WEIGHT = 3.0
+QUESTIONS_WEIGHT = 2.5
+SPEECHES_WEIGHT = 2.5
 COMMITTEES_WEIGHT = 2.0
+
+# Per-month rate that earns full marks for questions/speeches
+FULL_MARKS_QUESTIONS_PER_MONTH = 2.0
+FULL_MARKS_SPEECHES_PER_MONTH = 2.0
+
+# Total committee days that earn full marks
+FULL_MARKS_COMMITTEE_DAYS = 1000.0
 
 # Houses
 COMMONS = 1
@@ -94,6 +103,54 @@ def get_tenure_start(conn, member_id):
 
     # Default: preserve previous behaviour's implicit 2016 cutoff
     return DEFAULT_TENURE_START
+
+
+def get_months_since_tenure_start(conn, member_id):
+    """Compute months from the MP's tenure start to now."""
+    tenure_start = get_tenure_start(conn, member_id)
+    try:
+        start = datetime.date.fromisoformat(tenure_start[:10])
+        now = datetime.date.today()
+        months = (now.year - start.year) * 12 + (now.month - start.month)
+        return max(1, months)
+    except Exception:
+        return 12  # fallback
+
+
+def get_committee_tenure_days(conn, member_id):
+    """Compute total committee tenure days from bio_data.committeesJson.
+
+    Each committee membership has a startDate and optional endDate (null = ongoing).
+    Sums the days across all memberships to reward long-serving committee members.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT committeesJson FROM bio_data WHERE mpId = ?",
+        (member_id,),
+    )
+    row = cursor.fetchone()
+    if not row or not row[0]:
+        return 0
+
+    try:
+        committees = json.loads(row[0])
+        total_days = 0
+        today = datetime.date.today()
+        for comm in committees:
+            start_str = comm.get("startDate")
+            if not start_str:
+                continue
+            start = datetime.date.fromisoformat(start_str[:10])
+            end_str = comm.get("endDate")
+            if end_str:
+                end = datetime.date.fromisoformat(end_str[:10])
+            else:
+                end = today
+            if end > start:
+                total_days += (end - start).days
+        return total_days
+    except Exception:
+        return 0
 
 
 def create_precompute_tables(conn):
@@ -279,28 +336,41 @@ def compute_per_mp_metrics(conn):
             "rebellionRate": rebellion_rate,
             "rebellionCount": rebellion_count,
             "totalDivisionsVoted": total_divisions_voted,
+            "monthsSinceTenureStart": get_months_since_tenure_start(conn, member_id),
+            "committeeTenureDays": get_committee_tenure_days(conn, member_id),
         })
 
     return results
 
 
 def compute_activity_score(participation_rate, question_count, speech_count,
-                           committee_count, avg_questions, avg_speeches, avg_committees):
-    """Compute activity score using the same formula as ActivityScoreCalculator.kt.
-    Returns a float 0.0-10.0."""
+                           months_since_tenure, committee_tenure_days):
+    """Compute activity score using the self-performance formula (matches ActivityScoreCalculator.kt).
+    Returns a float 0.0-10.0.
+
+    Weights: votes 3.0, questions 2.5, speeches 2.5, committees 2.0.
+    Questions/speeches scored as per-month rates. Committees scored as tenure days.
+    No peer normalization — the score reflects the MP's own activity.
+    """
     vote_contrib = min(participation_rate * VOTE_WEIGHT, VOTE_WEIGHT)
-    questions_contrib = _normalize(question_count, avg_questions, QUESTIONS_WEIGHT)
-    speeches_contrib = _normalize(speech_count, avg_speeches, SPEECHES_WEIGHT)
-    committees_contrib = _normalize(committee_count, avg_committees, COMMITTEES_WEIGHT)
+
+    questions_per_month = question_count / max(1, months_since_tenure)
+    questions_contrib = _scale_rate(questions_per_month, FULL_MARKS_QUESTIONS_PER_MONTH, QUESTIONS_WEIGHT)
+
+    speeches_per_month = speech_count / max(1, months_since_tenure)
+    speeches_contrib = _scale_rate(speeches_per_month, FULL_MARKS_SPEECHES_PER_MONTH, SPEECHES_WEIGHT)
+
+    committees_contrib = _scale_rate(float(committee_tenure_days), FULL_MARKS_COMMITTEE_DAYS, COMMITTEES_WEIGHT)
+
     total = vote_contrib + questions_contrib + speeches_contrib + committees_contrib
     return max(0.0, min(10.0, total))
 
 
-def _normalize(count, average, weight):
-    """Normalize a count relative to peer average (matches ActivityScoreCalculator)."""
-    if average <= 0:
-        return weight if count > 0 else 0.0
-    ratio = count / (average * 2.0)
+def _scale_rate(rate, full_marks, weight):
+    """Scale a rate linearly: 0 → 0% of weight, full_marks → 100% of weight."""
+    if full_marks <= 0:
+        return 0.0
+    ratio = rate / full_marks
     return min(ratio * weight, weight)
 
 
@@ -324,23 +394,9 @@ def populate_mp_stats(conn, mp_metrics):
     for m in mp_metrics:
         by_house.setdefault(m["house"], []).append(m)
 
-    # Compute peer averages per house (needed for activity score)
-    house_averages = {}
-    for house, mps in by_house.items():
-        n = len(mps)
-        if n == 0:
-            house_averages[house] = (0.0, 0.0, 0.0)
-            continue
-        avg_q = sum(m["questionCount"] for m in mps) / n
-        avg_s = sum(m["speechCount"] for m in mps) / n
-        avg_c = sum(m["committeeCount"] for m in mps) / n
-        house_averages[house] = (avg_q, avg_s, avg_c)
-
     # Compute percentiles and activity scores
     rows = []
     for house, mps in by_house.items():
-        avg_q, avg_s, avg_c = house_averages[house]
-
         # Collect peer value lists for percentile computation
         rebellion_values = [m["rebellionRate"] for m in mps]
         participation_values = [m["voteParticipationRate"] for m in mps]
@@ -353,8 +409,8 @@ def populate_mp_stats(conn, mp_metrics):
                 m["voteParticipationRate"],
                 m["questionCount"],
                 m["speechCount"],
-                m["committeeCount"],
-                avg_q, avg_s, avg_c,
+                m["monthsSinceTenureStart"],
+                m["committeeTenureDays"],
             )
             rebellion_pct = compute_percentile(m["rebellionRate"], rebellion_values)
             participation_pct = compute_percentile(m["voteParticipationRate"], participation_values)
