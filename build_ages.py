@@ -17,8 +17,10 @@ import argparse
 import json
 import logging
 import os
+import re
 import sqlite3
 import sys
+import time
 import urllib.parse
 import urllib.request
 
@@ -138,6 +140,60 @@ def create_ages_db(output_path):
     return conn
 
 
+def search_wikidata_by_name(name):
+    """Search Wikidata API by name and return the Q-ID of the best UK politician match."""
+    params = urllib.parse.urlencode({
+        "action": "wbsearchentities",
+        "search": name,
+        "language": "en",
+        "format": "json",
+        "type": "item",
+        "limit": "5",
+    })
+    url = f"https://www.wikidata.org/w/api.php?{params}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": WIKIDATA_USER_AGENT})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        for r in data.get("search", []):
+            desc = r.get("description", "").lower()
+            label = r.get("label", "").lower()
+            if any(kw in desc for kw in ["british politician", "uk politician",
+                                          "member of parliament", "mp for",
+                                          "british mp", "politician from the united kingdom",
+                                          "politician from the uk", "british politician from"]):
+                return r["id"]
+            if label == name.lower() and "politician" in desc:
+                return r["id"]
+    except Exception:
+        pass
+    return None
+
+
+def get_wikidata_dob(qid):
+    """Fetch date of birth (P569) for a single Wikidata entity."""
+    params = urllib.parse.urlencode({
+        "action": "wbgetclaims",
+        "entity": qid,
+        "property": "P569",
+        "format": "json",
+    })
+    url = f"https://www.wikidata.org/w/api.php?{params}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": WIKIDATA_USER_AGENT})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        claims = data.get("claims", {}).get("P569", [])
+        if claims:
+            val = claims[0].get("mainsnak", {}).get("datavalue", {}).get("value", {})
+            time_str = val.get("time", "")
+            if time_str:
+                return time_str[1:11]  # Remove + prefix, take YYYY-MM-DD
+    except Exception:
+        pass
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build MP birth dates from Wikidata")
     parser.add_argument("--output", required=True, help="Path to ages.db output")
@@ -154,21 +210,50 @@ def main():
     # 2. Build wikidata lookup (mp_id → qid)
     qid_lookup = build_wikidata_lookup(data, args.goveye_db)
     if not qid_lookup:
-        logger.error("No Wikidata Q-IDs found — cannot proceed")
-        sys.exit(1)
+        logger.warning("No Wikidata Q-IDs found in ParlParse — will search by name")
 
-    # 3. Query Wikidata for dateOfBirth (batch)
-    all_qids = list(qid_lookup.values())
-    dob_map = query_wikidata_batch(all_qids)
-
-    # 4. Build mp_id → dateOfBirth mapping
+    # 3. Query Wikidata for dateOfBirth (batch) for MPs with Q-IDs
     mp_ages = {}
-    for mp_id, qid in qid_lookup.items():
-        dob = dob_map.get(qid)
-        if dob:
-            mp_ages[mp_id] = dob
+    if qid_lookup:
+        all_qids = list(qid_lookup.values())
+        dob_map = query_wikidata_batch(all_qids)
+        for mp_id, qid in qid_lookup.items():
+            dob = dob_map.get(qid)
+            if dob:
+                mp_ages[mp_id] = dob
+        logger.info("Got birth dates for %d / %d MPs via ParlParse Q-IDs", len(mp_ages), len(qid_lookup))
 
-    logger.info("Got birth dates for %d / %d MPs", len(mp_ages), len(qid_lookup))
+    # 4. For MPs without Q-IDs in ParlParse (e.g. 2024 cohort), search Wikidata
+    #    API by name and fetch DOB directly. This is the fallback for new MPs
+    #    whose Wikidata entries haven't been linked in ParlParse yet.
+    conn = sqlite3.connect(args.goveye_db)
+    all_mp_ids = set(row[0] for row in conn.execute("SELECT id FROM mps").fetchall())
+    conn.close()
+    missing_ids = all_mp_ids - set(mp_ages.keys())
+    if missing_ids:
+        logger.info("Searching Wikidata API by name for %d MPs without Q-IDs...", len(missing_ids))
+        # Get MP names from goveye.db
+        conn = sqlite3.connect(args.goveye_db)
+        mp_names = {}
+        for row in conn.execute("SELECT id, nameDisplayAs FROM mps"):
+            if row[0] in missing_ids:
+                mp_names[row[0]] = row[1]
+        conn.close()
+
+        import re as _re
+        search_found = 0
+        for mp_id, name in mp_names.items():
+            clean_name = _re.sub(r'^(Sir|Dame|Dr|Mr|Mrs|Ms)\s+', '', name).strip()
+            qid = search_wikidata_by_name(clean_name)
+            if qid:
+                dob = get_wikidata_dob(qid)
+                if dob:
+                    mp_ages[mp_id] = dob
+                    search_found += 1
+            time.sleep(0.5)  # Rate limit
+        logger.info("Found %d more DOBs via Wikidata name search", search_found)
+
+    logger.info("Total birth dates: %d / %d MPs", len(mp_ages), len(all_mp_ids))
 
     # 5. Write to ages.db
     conn = create_ages_db(args.output)
