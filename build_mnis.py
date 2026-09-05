@@ -171,27 +171,27 @@ def parse_mnis_member(member_elem):
         if speech is not None:
             maiden_speech_date = _normalize_date(_text(speech, "SpeechDate"))
 
-    # Government posts
+    # Government posts — MNIS uses <Name> not <Title> for post names
     gov_posts = []
     gov_elem = member_elem.find("GovernmentPosts")
     if gov_elem is not None:
         for post in gov_elem.findall("GovernmentPost"):
             gov_posts.append({
                 "type": "Government Post",
-                "title": _text(post, "Title"),
+                "title": _text(post, "Name"),
                 "department": _text(post, "Department"),
                 "startDate": _normalize_date(_text(post, "StartDate")),
                 "endDate": _normalize_date(_text(post, "EndDate")),
             })
 
-    # Opposition posts
+    # Opposition posts — MNIS uses <Name> not <Title> for post names
     opp_posts = []
     opp_elem = member_elem.find("OppositionPosts")
     if opp_elem is not None:
         for post in opp_elem.findall("OppositionPost"):
             opp_posts.append({
                 "type": "Opposition Post",
-                "title": _text(post, "Title"),
+                "title": _text(post, "Name"),
                 "department": _text(post, "Department"),
                 "startDate": _normalize_date(_text(post, "StartDate")),
                 "endDate": _normalize_date(_text(post, "EndDate")),
