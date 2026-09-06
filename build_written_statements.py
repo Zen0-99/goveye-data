@@ -253,6 +253,17 @@ def build_delta(output_path, previous_db, schema_path, days=90):
     schema_module.ensure_schema(conn, schema_path, TABLE_NAMES)
     logger.info("Schema ensured for delta build")
 
+    # Manual migration: add hasLinkedStatements + linkedStatementsJson columns
+    # if they don't exist (the schema JSON may not be synced yet from the app)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(written_statements)").fetchall()]
+    if "hasLinkedStatements" not in cols:
+        conn.execute("ALTER TABLE written_statements ADD COLUMN hasLinkedStatements INTEGER NOT NULL DEFAULT 0")
+        logger.info("Schema migration: added hasLinkedStatements column to written_statements")
+    if "linkedStatementsJson" not in cols:
+        conn.execute("ALTER TABLE written_statements ADD COLUMN linkedStatementsJson TEXT")
+        logger.info("Schema migration: added linkedStatementsJson column to written_statements")
+    conn.commit()
+
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
