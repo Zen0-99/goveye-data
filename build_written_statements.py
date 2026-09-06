@@ -72,7 +72,7 @@ def fetch_written_statements(start_date, end_date):
             "answeringBodyName": val.get("answeringBodyName", ""),
             "title": val.get("title", ""),
             "text": val.get("text", ""),
-            "house": val.get("house", 1),
+            "house": 1 if val.get("house") == "Commons" else 2,
             "hasLinkedStatements": val.get("hasLinkedStatements", False),
             "linkedStatements": val.get("linkedStatements"),
         })
