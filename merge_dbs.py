@@ -120,6 +120,25 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
         logger.info("Schema migration: added linkedStatementsJson column to written_statements")
     conn.commit()
 
+    # Manual migration: add answer/response columns to written_questions
+    # if the schema JSON hasn't been synced yet.
+    wq_cols = [r[1] for r in conn.execute("PRAGMA table_info(written_questions)").fetchall()]
+    wq_new_cols = [
+        ("heading", "TEXT NOT NULL DEFAULT ''"),
+        ("dateForAnswer", "TEXT NOT NULL DEFAULT ''"),
+        ("dateAnswered", "TEXT NOT NULL DEFAULT ''"),
+        ("answerText", "TEXT NOT NULL DEFAULT ''"),
+        ("answeringMemberId", "INTEGER NOT NULL DEFAULT 0"),
+        ("isWithdrawn", "INTEGER NOT NULL DEFAULT 0"),
+        ("answerIsHolding", "INTEGER NOT NULL DEFAULT 0"),
+        ("answerIsCorrection", "INTEGER NOT NULL DEFAULT 0"),
+    ]
+    for col_name, col_def in wq_new_cols:
+        if col_name not in wq_cols:
+            conn.execute(f"ALTER TABLE written_questions ADD COLUMN {col_name} {col_def}")
+            logger.info("Schema migration: added %s column to written_questions", col_name)
+    conn.commit()
+
     # Map argument names to provided paths
     source_dbs = {
         "mps_db": mps_db,

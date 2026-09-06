@@ -52,24 +52,28 @@ API_BATCH_SIZE = 500  # questions per API page (skip/take pagination)
 def fetch_full_question_text(question_id):
     """Fetch the full text of a single question from the individual endpoint.
 
-    Pitfall 4: the bulk API truncates text at 255 chars. When
-    len(questionText) == 255, we fetch the full text from
+    Pitfall 4: the bulk API truncates text at ~258 chars. When
+    len(questionText) >= 255, we fetch the full text from
     GET {QUESTIONS_API}/{id}.
+
+    Also fetches the full answerText if the bulk answerText is truncated
+    (len >= 255). The individual endpoint returns the complete answerText.
 
     Args:
         question_id: The Parliament question ID.
 
     Returns:
-        The full text string, or empty string if the fetch fails.
+        Tuple of (question_text, answer_text) — full text strings,
+        or ("", "") if the fetch fails.
     """
     try:
         r = api_get(f"{QUESTIONS_API}/{question_id}", timeout=30)
         data = r.json()
         val = data.get("value", data)
-        return val.get("text", "")
+        return val.get("text", ""), val.get("answerText", "")
     except Exception as e:
         logger.warning("Failed to fetch full text for question %s: %s", question_id, e)
-        return ""
+        return "", ""
 
 
 def _parse_question(val):
@@ -82,7 +86,15 @@ def _parse_question(val):
         "answeringBodyId": val.get("answeringBodyId"),
         "answeringBodyName": val.get("answeringBodyName", ""),
         "questionText": val.get("questionText", ""),
-        "house": val.get("house", 1),
+        "house": 1 if val.get("house") == "Commons" else 2,
+        "heading": val.get("heading", ""),
+        "dateForAnswer": val.get("dateForAnswer", ""),
+        "dateAnswered": val.get("dateAnswered", ""),
+        "answerText": val.get("answerText", ""),
+        "answeringMemberId": val.get("answeringMemberId"),
+        "isWithdrawn": val.get("isWithdrawn", False),
+        "answerIsHolding": val.get("answerIsHolding", False),
+        "answerIsCorrection": val.get("answerIsCorrection", False),
     }
 
 
@@ -221,7 +233,9 @@ def map_question_to_entity(q, timestamp_millis):
 
     Matches WrittenQuestionEntity fields:
     (id, memberId, uin, dateTabled, answeringBodyId,
-     answeringBodyName, questionText, house, lastUpdated)
+     answeringBodyName, questionText, house, lastUpdated,
+     heading, dateForAnswer, dateAnswered, answerText,
+     answeringMemberId, isWithdrawn, answerIsHolding, answerIsCorrection)
     """
     return (
         q.get("id") or 0,
@@ -233,6 +247,14 @@ def map_question_to_entity(q, timestamp_millis):
         q.get("questionText") or "",
         q.get("house") or 1,
         timestamp_millis,
+        q.get("heading") or "",
+        q.get("dateForAnswer") or "",
+        q.get("dateAnswered") or "",
+        q.get("answerText") or "",
+        q.get("answeringMemberId") or 0,
+        1 if q.get("isWithdrawn") else 0,
+        1 if q.get("answerIsHolding") else 0,
+        1 if q.get("answerIsCorrection") else 0,
     )
 
 
@@ -245,8 +267,10 @@ def insert_questions(conn, questions, timestamp_millis):
     insert_sql = """
         INSERT OR REPLACE INTO written_questions (
             id, memberId, uin, dateTabled, answeringBodyId,
-            answeringBodyName, questionText, house, lastUpdated
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            answeringBodyName, questionText, house, lastUpdated,
+            heading, dateForAnswer, dateAnswered, answerText,
+            answeringMemberId, isWithdrawn, answerIsHolding, answerIsCorrection
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     rows = [map_question_to_entity(q, timestamp_millis) for q in questions]
@@ -305,13 +329,16 @@ def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=No
         insert_questions(conn, filtered, timestamp_millis)
         logger.info("Saved %d questions to DB (truncated text pending for some)", len(filtered))
 
-    # Pitfall 4: fetch full text for truncated questions (parallelised)
+    # Pitfall 4: fetch full text for truncated questions/answers (parallelised)
     # and update the DB incrementally as each full text arrives
-    truncated = [q for q in filtered if len(q.get("questionText", "")) == 255]
+    truncated = [q for q in filtered
+                 if len(q.get("questionText", "")) >= 255
+                 or len(q.get("answerText", "")) >= 255]
     logger.info("Fetching full text for %d truncated questions (parallel, 10 workers)",
                 len(truncated))
 
-    update_sql = "UPDATE written_questions SET questionText = ? WHERE id = ?"
+    update_q_sql = "UPDATE written_questions SET questionText = ? WHERE id = ?"
+    update_a_sql = "UPDATE written_questions SET answerText = ? WHERE id = ?"
     done_count = 0
     with ThreadPoolExecutor(max_workers=10) as executor:
         future_to_q = {
@@ -321,11 +348,14 @@ def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=No
         for future in as_completed(future_to_q):
             q = future_to_q[future]
             try:
-                full_text = future.result()
-                if full_text:
-                    q["questionText"] = full_text
-                    conn.execute(update_sql, (full_text, q["id"]))
-                    conn.commit()
+                full_qtext, full_atext = future.result()
+                if full_qtext:
+                    q["questionText"] = full_qtext
+                    conn.execute(update_q_sql, (full_qtext, q["id"]))
+                if full_atext:
+                    q["answerText"] = full_atext
+                    conn.execute(update_a_sql, (full_atext, q["id"]))
+                conn.commit()
             except Exception as e:
                 logger.warning("Failed to fetch full text for question %s: %s", q.get("id"), e)
             done_count += 1
@@ -375,13 +405,16 @@ def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None):
         insert_questions(conn, filtered, timestamp_millis)
         logger.info("Saved %d questions to DB (truncated text pending for some)", len(filtered))
 
-    # Pitfall 4: fetch full text for truncated questions (parallelised)
+    # Pitfall 4: fetch full text for truncated questions/answers (parallelised)
     # and update the DB incrementally as each full text arrives
-    truncated = [q for q in filtered if len(q.get("questionText", "")) == 255]
+    truncated = [q for q in filtered
+                 if len(q.get("questionText", "")) >= 255
+                 or len(q.get("answerText", "")) >= 255]
     logger.info("Fetching full text for %d truncated questions (parallel, 10 workers)",
                 len(truncated))
 
-    update_sql = "UPDATE written_questions SET questionText = ? WHERE id = ?"
+    update_q_sql = "UPDATE written_questions SET questionText = ? WHERE id = ?"
+    update_a_sql = "UPDATE written_questions SET answerText = ? WHERE id = ?"
     done_count = 0
     with ThreadPoolExecutor(max_workers=10) as executor:
         future_to_q = {
@@ -391,11 +424,14 @@ def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None):
         for future in as_completed(future_to_q):
             q = future_to_q[future]
             try:
-                full_text = future.result()
-                if full_text:
-                    q["questionText"] = full_text
-                    conn.execute(update_sql, (full_text, q["id"]))
-                    conn.commit()
+                full_qtext, full_atext = future.result()
+                if full_qtext:
+                    q["questionText"] = full_qtext
+                    conn.execute(update_q_sql, (full_qtext, q["id"]))
+                if full_atext:
+                    q["answerText"] = full_atext
+                    conn.execute(update_a_sql, (full_atext, q["id"]))
+                conn.commit()
             except Exception as e:
                 logger.warning("Failed to fetch full text for question %s: %s", q.get("id"), e)
             done_count += 1
