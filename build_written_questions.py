@@ -386,6 +386,25 @@ def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None):
     schema_module.ensure_schema(conn, schema_path, TABLE_NAMES)
     logger.info("Schema ensured for delta build")
 
+    # Manual migration: add answer/response columns if the schema JSON
+    # hasn't been synced yet (same columns as MIGRATION_32_33 in the app).
+    wq_cols = [r[1] for r in conn.execute("PRAGMA table_info(written_questions)").fetchall()]
+    wq_new_cols = [
+        ("heading", "TEXT NOT NULL DEFAULT ''"),
+        ("dateForAnswer", "TEXT NOT NULL DEFAULT ''"),
+        ("dateAnswered", "TEXT NOT NULL DEFAULT ''"),
+        ("answerText", "TEXT NOT NULL DEFAULT ''"),
+        ("answeringMemberId", "INTEGER NOT NULL DEFAULT 0"),
+        ("isWithdrawn", "INTEGER NOT NULL DEFAULT 0"),
+        ("answerIsHolding", "INTEGER NOT NULL DEFAULT 0"),
+        ("answerIsCorrection", "INTEGER NOT NULL DEFAULT 0"),
+    ]
+    for col_name, col_def in wq_new_cols:
+        if col_name not in wq_cols:
+            conn.execute(f"ALTER TABLE written_questions ADD COLUMN {col_name} {col_def}")
+            logger.info("Delta migration: added %s column to written_questions", col_name)
+    conn.commit()
+
     # Load MP IDs for filtering
     mp_ids = fetch_all_mps_from_db(mps_db)
     logger.info("Loaded %d MP IDs from %s for filtering", len(mp_ids), mps_db)
