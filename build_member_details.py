@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Per-API build script for MP member details (synopsis, contacts, experience).
+"""Per-API build script for MP member details (synopsis, contacts, experience, biography).
 
-Fetches Synopsis, Contact, and Experience data for all current Commons MPs
-from the Parliament Members API and builds a per-API DB (member_details.db)
-with three tables: mp_synopsis, mp_contacts, mp_experience.
+Fetches Synopsis, Contact, Experience, and Biography data for all current
+Commons MPs from the Parliament Members API and builds a per-API DB
+(member_details.db) with four tables: mp_synopsis, mp_contacts,
+mp_experience, mp_career_events.
 
 These are per-MP endpoints (one HTTP call per MP per endpoint), so this
-script makes 3 × N calls (where N ≈ 650). With API_DELAY=0.2s, the full
-seed takes ~6-7 minutes.
+script makes 4 × N calls (where N ≈ 650). With API_DELAY=0.2s, the full
+seed takes ~9 minutes.
 
 Modes:
   seed  — create fresh DB, fetch all data, insert
@@ -30,7 +31,45 @@ from api_helper import API_DELAY, BATCH_SIZE, api_get, logger
 # --- Constants ---
 
 MEMBERS_BASE = "https://members-api.parliament.uk/api/"
-TABLE_NAMES = ["mp_synopsis", "mp_contacts", "mp_experience"]
+TABLE_NAMES = ["mp_synopsis", "mp_contacts", "mp_experience", "mp_career_events"]
+
+# Fallback CREATE TABLE for mp_career_events — the schema JSON does not yet
+# include this table, so create_database_with_tables() won't create it.
+# Run this after DB creation to ensure the table exists.
+MP_CAREER_EVENTS_CREATE_SQL = """
+CREATE TABLE IF NOT EXISTS mp_career_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mpId INTEGER NOT NULL,
+    category TEXT NOT NULL,
+    name TEXT,
+    house INTEGER,
+    startDate TEXT,
+    endDate TEXT,
+    additionalInfo TEXT,
+    additionalInfoLink TEXT,
+    constituencyName TEXT,
+    constituencyId INTEGER,
+    source TEXT NOT NULL DEFAULT 'parliament',
+    lastUpdated INTEGER NOT NULL
+)
+"""
+
+MP_CAREER_EVENTS_INDEX_SQL = (
+    "CREATE INDEX IF NOT EXISTS index_mp_career_events_mpId ON mp_career_events(mpId)"
+)
+
+
+def ensure_mp_career_events_table(conn):
+    """Create the mp_career_events table if it doesn't exist.
+
+    The schema JSON does not yet include this table, so
+    create_database_with_tables() skips it. This fallback creates it
+    (and its index) idempotently after the DB is opened.
+    """
+    cursor = conn.cursor()
+    cursor.execute(MP_CAREER_EVENTS_CREATE_SQL)
+    cursor.execute(MP_CAREER_EVENTS_INDEX_SQL)
+    conn.commit()
 
 
 # --- MP ID fetching ---
@@ -90,6 +129,23 @@ def fetch_experience(mp_id):
         return []
 
 
+def fetch_biography(mp_id):
+    """Fetch the full biography for a single MP.
+
+    Returns the "value" dict from the Biography endpoint, or None on failure.
+    The value contains: representations, electionsContested, houseMemberships,
+    governmentPosts, oppositionPosts, otherPosts, partyAffiliations,
+    committeeMemberships.
+    """
+    try:
+        r = api_get(f"{MEMBERS_BASE}Members/{mp_id}/Biography", timeout=30)
+        data = r.json()
+        return data.get("value")
+    except Exception as e:
+        logger.warning("Biography fetch failed for MP %d: %s", mp_id, e)
+        return None
+
+
 # --- Entity mapping ---
 
 def map_synopsis(mp_id, synopsis_text, timestamp_millis):
@@ -137,6 +193,58 @@ def map_experience(mp_id, exp_dto, timestamp_millis):
     )
 
 
+# Maps each Biography "value" list key to the career-event category label
+# stored in the mp_career_events.category column.
+BIOGRAPHY_CATEGORY_MAP = [
+    ("representations", "representation"),
+    ("governmentPosts", "government_post"),
+    ("oppositionPosts", "opposition_post"),
+    ("otherPosts", "other_post"),
+    ("partyAffiliations", "party_affiliation"),
+    ("committeeMemberships", "committee"),
+    ("houseMemberships", "house_membership"),
+]
+
+
+def map_biography_events(mp_id, bio_data, timestamp_millis):
+    """Convert a Biography endpoint "value" dict into mp_career_events rows.
+
+    Each category list (representations, governmentPosts, oppositionPosts,
+    otherPosts, partyAffiliations, committeeMemberships, houseMemberships)
+    becomes rows. For representations, the entry's name/id are also stored
+    in constituencyName/constituencyId.
+
+    Returns a list of row tuples matching the insert_career_events column
+    order:
+        (mpId, category, name, house, startDate, endDate, additionalInfo,
+         additionalInfoLink, constituencyName, constituencyId, source,
+         lastUpdated)
+    """
+    rows = []
+    if not bio_data:
+        return rows
+
+    for list_key, category in BIOGRAPHY_CATEGORY_MAP:
+        entries = bio_data.get(list_key) or []
+        for entry in entries:
+            is_representation = category == "representation"
+            rows.append((
+                mp_id,
+                category,
+                entry.get("name"),
+                entry.get("house"),
+                entry.get("startDate"),
+                entry.get("endDate"),
+                entry.get("additionalInfo"),
+                entry.get("additionalInfoLink"),
+                entry.get("name") if is_representation else None,
+                entry.get("id") if is_representation else None,
+                "parliament",
+                timestamp_millis,
+            ))
+    return rows
+
+
 # --- Insertion ---
 
 def insert_synopsis(conn, rows):
@@ -180,6 +288,36 @@ def insert_experience(conn, rows):
         conn.commit()
 
 
+def insert_career_events(conn, rows):
+    """Insert mp_career_events rows.
+
+    Existing rows for each MP (source='parliament') are deleted before
+    inserting so updates replace cleanly. Rows are grouped by mpId for the
+    delete to avoid one DELETE per row.
+    """
+    if not rows:
+        return
+    cursor = conn.cursor()
+    # Delete existing parliament-sourced career events for the MPs in this
+    # batch before inserting fresh rows.
+    mp_ids = {row[0] for row in rows}
+    for mp_id in mp_ids:
+        cursor.execute(
+            "DELETE FROM mp_career_events WHERE mpId = ? AND source = 'parliament'",
+            (mp_id,),
+        )
+    sql = """
+        INSERT INTO mp_career_events (
+            mpId, category, name, house, startDate, endDate,
+            additionalInfo, additionalInfoLink, constituencyName,
+            constituencyId, source, lastUpdated
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    for i in range(0, len(rows), BATCH_SIZE):
+        cursor.executemany(sql, rows[i:i + BATCH_SIZE])
+        conn.commit()
+
+
 # --- Build ---
 
 def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=None):
@@ -190,6 +328,7 @@ def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=No
         if os.path.abspath(checkpoint_db) != os.path.abspath(output_path):
             shutil.copy2(checkpoint_db, output_path)
         conn = sqlite3.connect(output_path)
+        ensure_mp_career_events_table(conn)
         cursor = conn.cursor()
         cursor.execute("SELECT mpId FROM mp_synopsis")
         processed = {row[0] for row in cursor.fetchall()}
@@ -198,6 +337,7 @@ def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=No
         conn = schema_module.create_database_with_tables(
             output_path, schema_path, TABLE_NAMES,
         )
+        ensure_mp_career_events_table(conn)
         processed = set()
 
     mp_ids = fetch_mp_ids_from_db(mps_db)
@@ -207,12 +347,13 @@ def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=No
     synopsis_rows = []
     contact_rows = []
     experience_rows = []
+    career_event_rows = []
 
     for i, mp_id in enumerate(mp_ids):
         if mp_id in processed:
             continue
 
-        # Fetch all three endpoints for this MP
+        # Fetch all four endpoints for this MP
         synopsis = fetch_synopsis(mp_id)
         if synopsis:
             synopsis_rows.append(map_synopsis(mp_id, synopsis, timestamp_millis))
@@ -225,14 +366,20 @@ def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=No
         for e in experience:
             experience_rows.append(map_experience(mp_id, e, timestamp_millis))
 
+        bio = fetch_biography(mp_id)
+        if bio:
+            career_event_rows.extend(map_biography_events(mp_id, bio, timestamp_millis))
+
         # Batch insert every 50 MPs to avoid holding everything in memory
         if (i + 1) % 50 == 0:
             insert_synopsis(conn, synopsis_rows)
             insert_contacts(conn, contact_rows)
             insert_experience(conn, experience_rows)
+            insert_career_events(conn, career_event_rows)
             synopsis_rows = []
             contact_rows = []
             experience_rows = []
+            career_event_rows = []
             logger.info("Processed %d/%d MPs", i + 1, len(mp_ids))
 
         time.sleep(API_DELAY)
@@ -244,6 +391,8 @@ def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=No
         insert_contacts(conn, contact_rows)
     if experience_rows:
         insert_experience(conn, experience_rows)
+    if career_event_rows:
+        insert_career_events(conn, career_event_rows)
 
     logger.info("VACUUMing database...")
     conn.execute("VACUUM")
@@ -257,6 +406,7 @@ def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None):
 
     shutil.copy2(previous_db, output_path)
     conn = sqlite3.connect(output_path)
+    ensure_mp_career_events_table(conn)
 
     mp_ids = fetch_mp_ids_from_db(mps_db)
     if mp_limit:
@@ -265,6 +415,7 @@ def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None):
     synopsis_rows = []
     contact_rows = []
     experience_rows = []
+    career_event_rows = []
 
     for i, mp_id in enumerate(mp_ids):
         synopsis = fetch_synopsis(mp_id)
@@ -279,13 +430,19 @@ def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None):
         for e in experience:
             experience_rows.append(map_experience(mp_id, e, timestamp_millis))
 
+        bio = fetch_biography(mp_id)
+        if bio:
+            career_event_rows.extend(map_biography_events(mp_id, bio, timestamp_millis))
+
         if (i + 1) % 50 == 0:
             insert_synopsis(conn, synopsis_rows)
             insert_contacts(conn, contact_rows)
             insert_experience(conn, experience_rows)
+            insert_career_events(conn, career_event_rows)
             synopsis_rows = []
             contact_rows = []
             experience_rows = []
+            career_event_rows = []
             logger.info("Processed %d/%d MPs", i + 1, len(mp_ids))
 
         time.sleep(API_DELAY)
@@ -296,6 +453,8 @@ def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None):
         insert_contacts(conn, contact_rows)
     if experience_rows:
         insert_experience(conn, experience_rows)
+    if career_event_rows:
+        insert_career_events(conn, career_event_rows)
 
     logger.info("VACUUMing database...")
     conn.execute("VACUUM")
