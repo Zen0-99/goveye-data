@@ -8,11 +8,24 @@ on:
 permissions:
   contents: write  # Required by softprops/action-gh-release@v3
 
-jobs:
-  build-and-publish:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+# Seed mode is split into a chain of batch jobs (seed-batch-1 … seed-batch-6)
+# because a single 60-minute job gets killed by the GitHub Actions timeout before
+# the full-text fetching completes. Each batch fetches full text for at most
+# 25000 truncated questions, saves the checkpoint DB as a workflow artifact, and
+# exits with code 2 to signal that more work remains. The next batch downloads
+# the artifact and resumes.
+#
+# Delta mode (incremental update) runs in a single job inside publish — it only
+# fetches a handful of new questions and completes well within the timeout.
+#
+# To increase total seed capacity, add more seed-batch-N jobs following the
+# same pattern and add them to the publish job's needs list.
 
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.check_mode.outputs.mode }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,89 +45,467 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Restore seed checkpoint
-        id: restore_checkpoint
-        if: steps.download_prev.outputs.has_previous != 'true'
-        uses: actions/cache@v4
-        with:
-          path: written_questions.db
-          key: written-questions-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
-          restore-keys: |
-            written-questions-seed-${{ hashFiles('schemas/bundled_schema.json') }}-
-
-      - name: Download previous DB and manifest
-        id: download_prev
+      - name: Check for previous DB (determines seed vs delta)
+        id: check_mode
         run: |
-          gh release download written-questions-latest \
-            --pattern written_questions.db --output prev_written_questions.db || echo "No previous DB (first run)"
-          gh release download written-questions-latest \
-            --pattern manifest.json --output prev_manifest.json || echo "No previous manifest (first run)"
-          if [ -f prev_written_questions.db ]; then
-            echo "has_previous=true" >> $GITHUB_OUTPUT
+          if gh release download written-questions-latest --pattern written_questions.db --output prev_written_questions.db 2>/dev/null; then
+            echo "mode=delta" >> $GITHUB_OUTPUT
           else
-            echo "has_previous=false" >> $GITHUB_OUTPUT
+            echo "mode=seed" >> $GITHUB_OUTPUT
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download failed-run checkpoint (if any)
-        if: steps.download_prev.outputs.has_previous != 'true'
-        continue-on-error: true
+      - name: Upload dependency DBs
+        if: steps.check_mode.outputs.mode == 'seed'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-dbs
+          path: |
+            mps.db
+            schemas/bundled_schema.json
+          retention-days: 1
+
+      - name: Upload delta DBs
+        if: steps.check_mode.outputs.mode == 'delta'
+        uses: actions/upload-artifact@v4
+        with:
+          name: delta-dbs
+          path: |
+            prev_written_questions.db
+            mps.db
+            schemas/bundled_schema.json
+          retention-days: 1
+
+  # --- Seed chain: each batch fetches full text for 25000 questions then passes the checkpoint ---
+
+  seed-batch-1:
+    needs: prepare
+    if: needs.prepare.outputs.mode == 'seed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    outputs:
+      more_work: ${{ steps.build.outputs.more_work }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
+
+      - name: Download dependency DBs
+        uses: actions/download-artifact@v4
+        with:
+          name: dependency-dbs
+
+      - name: Build seed batch 1
+        id: build
         run: |
-          PREV_RUN=$(gh run list --workflow=update-written-questions.yml --status=failure --limit=1 --json databaseId --jq '.[0].databaseId' 2>/dev/null)
-          if [ -n "$PREV_RUN" ]; then
-            gh run download "$PREV_RUN" --name written_questions-db-checkpoint --dir . || echo "No checkpoint from failed run"
-            if [ -f written_questions.db ]; then
-              echo "Found checkpoint from failed run $PREV_RUN — will resume"
-            fi
+          set +e
+          python build_written_questions.py \
+            --output written_questions.db \
+            --schema schemas/bundled_schema.json \
+            --mode seed \
+            --mps-db mps.db \
+            --checkpoint-db written_questions.db \
+            --max-full-text 25000
+          code=$?
+          set -e
+          if [ $code -eq 2 ]; then
+            echo "more_work=true" >> $GITHUB_OUTPUT
+          elif [ $code -ne 0 ]; then
+            exit $code
+          else
+            echo "more_work=false" >> $GITHUB_OUTPUT
           fi
+
+      - name: Upload checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: written-questions-checkpoint-1
+          path: written_questions.db
+          retention-days: 1
+
+  seed-batch-2:
+    needs: seed-batch-1
+    if: needs.seed-batch-1.outputs.more_work == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    outputs:
+      more_work: ${{ steps.build.outputs.more_work }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
+
+      - name: Download dependency DBs
+        uses: actions/download-artifact@v4
+        with:
+          name: dependency-dbs
+
+      - name: Download previous checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: written-questions-checkpoint-1
+
+      - name: Build seed batch 2
+        id: build
+        run: |
+          set +e
+          python build_written_questions.py \
+            --output written_questions.db \
+            --schema schemas/bundled_schema.json \
+            --mode seed \
+            --mps-db mps.db \
+            --checkpoint-db written_questions.db \
+            --max-full-text 25000
+          code=$?
+          set -e
+          if [ $code -eq 2 ]; then
+            echo "more_work=true" >> $GITHUB_OUTPUT
+          elif [ $code -ne 0 ]; then
+            exit $code
+          else
+            echo "more_work=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: written-questions-checkpoint-2
+          path: written_questions.db
+          retention-days: 1
+
+  seed-batch-3:
+    needs: seed-batch-2
+    if: needs.seed-batch-2.outputs.more_work == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    outputs:
+      more_work: ${{ steps.build.outputs.more_work }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
+
+      - name: Download dependency DBs
+        uses: actions/download-artifact@v4
+        with:
+          name: dependency-dbs
+
+      - name: Download previous checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: written-questions-checkpoint-2
+
+      - name: Build seed batch 3
+        id: build
+        run: |
+          set +e
+          python build_written_questions.py \
+            --output written_questions.db \
+            --schema schemas/bundled_schema.json \
+            --mode seed \
+            --mps-db mps.db \
+            --checkpoint-db written_questions.db \
+            --max-full-text 25000
+          code=$?
+          set -e
+          if [ $code -eq 2 ]; then
+            echo "more_work=true" >> $GITHUB_OUTPUT
+          elif [ $code -ne 0 ]; then
+            exit $code
+          else
+            echo "more_work=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: written-questions-checkpoint-3
+          path: written_questions.db
+          retention-days: 1
+
+  seed-batch-4:
+    needs: seed-batch-3
+    if: needs.seed-batch-3.outputs.more_work == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    outputs:
+      more_work: ${{ steps.build.outputs.more_work }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
+
+      - name: Download dependency DBs
+        uses: actions/download-artifact@v4
+        with:
+          name: dependency-dbs
+
+      - name: Download previous checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: written-questions-checkpoint-3
+
+      - name: Build seed batch 4
+        id: build
+        run: |
+          set +e
+          python build_written_questions.py \
+            --output written_questions.db \
+            --schema schemas/bundled_schema.json \
+            --mode seed \
+            --mps-db mps.db \
+            --checkpoint-db written_questions.db \
+            --max-full-text 25000
+          code=$?
+          set -e
+          if [ $code -eq 2 ]; then
+            echo "more_work=true" >> $GITHUB_OUTPUT
+          elif [ $code -ne 0 ]; then
+            exit $code
+          else
+            echo "more_work=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: written-questions-checkpoint-4
+          path: written_questions.db
+          retention-days: 1
+
+  seed-batch-5:
+    needs: seed-batch-4
+    if: needs.seed-batch-4.outputs.more_work == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    outputs:
+      more_work: ${{ steps.build.outputs.more_work }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
+
+      - name: Download dependency DBs
+        uses: actions/download-artifact@v4
+        with:
+          name: dependency-dbs
+
+      - name: Download previous checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: written-questions-checkpoint-4
+
+      - name: Build seed batch 5
+        id: build
+        run: |
+          set +e
+          python build_written_questions.py \
+            --output written_questions.db \
+            --schema schemas/bundled_schema.json \
+            --mode seed \
+            --mps-db mps.db \
+            --checkpoint-db written_questions.db \
+            --max-full-text 25000
+          code=$?
+          set -e
+          if [ $code -eq 2 ]; then
+            echo "more_work=true" >> $GITHUB_OUTPUT
+          elif [ $code -ne 0 ]; then
+            exit $code
+          else
+            echo "more_work=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: written-questions-checkpoint-5
+          path: written_questions.db
+          retention-days: 1
+
+  seed-batch-6:
+    needs: seed-batch-5
+    if: needs.seed-batch-5.outputs.more_work == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    outputs:
+      more_work: ${{ steps.build.outputs.more_work }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
+
+      - name: Download dependency DBs
+        uses: actions/download-artifact@v4
+        with:
+          name: dependency-dbs
+
+      - name: Download previous checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: written-questions-checkpoint-5
+
+      - name: Build seed batch 6
+        id: build
+        run: |
+          set +e
+          python build_written_questions.py \
+            --output written_questions.db \
+            --schema schemas/bundled_schema.json \
+            --mode seed \
+            --mps-db mps.db \
+            --checkpoint-db written_questions.db \
+            --max-full-text 25000
+          code=$?
+          set -e
+          if [ $code -eq 2 ]; then
+            echo "more_work=true" >> $GITHUB_OUTPUT
+          elif [ $code -ne 0 ]; then
+            exit $code
+          else
+            echo "more_work=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: written-questions-checkpoint-6
+          path: written_questions.db
+          retention-days: 1
+
+  # --- Publish: runs after seed chain completes OR directly in delta mode ---
+
+  publish:
+    needs: [prepare, seed-batch-1, seed-batch-2, seed-batch-3, seed-batch-4, seed-batch-5, seed-batch-6]
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
+
+      # --- Delta mode: build incrementally in this job ---
+
+      - name: Download delta DBs
+        if: needs.prepare.outputs.mode == 'delta'
+        uses: actions/download-artifact@v4
+        with:
+          name: delta-dbs
+
+      - name: Download previous manifest (delta mode)
+        if: needs.prepare.outputs.mode == 'delta'
+        run: |
+          gh release download written-questions-latest --pattern manifest.json --output prev_manifest.json || echo "No previous manifest"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build Written Questions database (seed mode)
-        if: steps.download_prev.outputs.has_previous != 'true'
-        run: |
-          python build_written_questions.py --output written_questions.db --schema schemas/bundled_schema.json --mode seed --mps-db mps.db --checkpoint-db written_questions.db
 
       - name: Build Written Questions database (delta mode)
-        if: steps.download_prev.outputs.has_previous == 'true'
+        if: needs.prepare.outputs.mode == 'delta'
         run: |
           python build_written_questions.py --output written_questions.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_written_questions.db --mps-db mps.db
 
-      - name: Save seed checkpoint
-        if: steps.download_prev.outputs.has_previous != 'true' && always()
-        uses: actions/cache@v4
-        with:
-          path: written_questions.db
-          key: written-questions-seed-${{ hashFiles('schemas/bundled_schema.json') }}-${{ github.run_id }}
+      # --- Seed mode: download the latest checkpoint from the chain ---
 
-      - name: Upload checkpoint artifact (for failed-run resume)
-        if: steps.download_prev.outputs.has_previous != 'true' && (failure() || cancelled())
-        uses: actions/upload-artifact@v4
-        with:
-          name: written_questions-db-checkpoint
-          path: written_questions.db
-          retention-days: 7
+      - name: Download latest seed checkpoint
+        if: needs.prepare.outputs.mode == 'seed'
+        run: |
+          # Try checkpoint artifacts in reverse order — the highest-numbered
+          # one that exists is the final checkpoint from the chain.
+          for i in 6 5 4 3 2 1; do
+            rm -rf checkpoint
+            if gh run download "$GITHUB_RUN_ID" \
+                 --repo "${{ github.repository }}" \
+                 --name "written-questions-checkpoint-$i" \
+                 --dir checkpoint 2>/dev/null; then
+              echo "Found checkpoint from batch $i"
+              cp checkpoint/written_questions.db written_questions.db
+              break
+            fi
+          done
+          if [ ! -f written_questions.db ]; then
+            echo "::error::No seed checkpoint found"
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Per-API DBs are intermediate artifacts, not opened by Room.
-      # Schema validation happens on the merged goveye.db in build-seed.yml.
-      - name: Generate diff patch
-        if: steps.download_prev.outputs.has_previous == 'true'
+      # --- Generate diff + manifest, then publish ---
+
+      - name: Generate diff patch (delta mode)
+        if: needs.prepare.outputs.mode == 'delta'
         run: |
           python diff_db.py --new written_questions.db --previous prev_written_questions.db --schema schemas/bundled_schema.json --output patch.json --tables written_questions
 
-      - name: Generate diff patch (first run)
-        if: steps.download_prev.outputs.has_previous != 'true'
+      - name: Generate diff patch (seed mode)
+        if: needs.prepare.outputs.mode == 'seed'
         run: |
           python diff_db.py --new written_questions.db --schema schemas/bundled_schema.json --output patch.json --tables written_questions
 
-      - name: Generate manifest
-        if: steps.download_prev.outputs.has_previous == 'true'
+      - name: Generate manifest (delta mode)
+        if: needs.prepare.outputs.mode == 'delta'
         run: |
           python manifest.py --db written_questions.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json --previous-manifest prev_manifest.json
 
-      - name: Generate manifest (first run)
-        if: steps.download_prev.outputs.has_previous != 'true'
+      - name: Generate manifest (seed mode)
+        if: needs.prepare.outputs.mode == 'seed'
         run: |
           python manifest.py --db written_questions.db --patch patch.json --output manifest.json --schema schemas/bundled_schema.json
 
@@ -122,6 +513,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: written-questions-latest
+          fail_on_unmatched_files: true
           name: Written Questions Latest
           body: |
             Written Questions database update for GovEye (weekly).

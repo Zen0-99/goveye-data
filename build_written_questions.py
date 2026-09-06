@@ -291,11 +291,22 @@ def get_processed_question_ids(conn):
     return {row[0] for row in cursor.fetchall()}
 
 
-def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=None):
+def build_seed(output_path, schema_path, mps_db, mp_limit=None,
+               checkpoint_db=None, max_full_text=None):
     """Seed mode: create fresh DB, fetch all questions, filter to MPs, insert.
 
     If checkpoint_db exists and has data, upserts on top of it (INSERT OR
     REPLACE handles dedup).
+
+    If max_full_text is set, fetches full text for at most that many truncated
+    questions, then exits with sys.exit(2) to signal that more work remains.
+    The caller (CI chain) should resume from the saved checkpoint DB.
+
+    On checkpoint resume, skips the API fetch phase entirely — questions are
+    already in the DB with truncated text. Only continues full-text fetching
+    for questions that still have truncated text.
+
+    Returns True if more full-text work remains (caller should exit 2).
     """
     timestamp_millis = int(time.time() * 1000)
 
@@ -305,6 +316,14 @@ def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=No
         conn = sqlite3.connect(output_path)
         existing = get_processed_question_ids(conn)
         logger.info("Resuming from checkpoint: %d questions already in DB", len(existing))
+        # Check if we need to fetch from API or just continue full-text
+        row_count = conn.execute("SELECT COUNT(*) FROM written_questions").fetchone()[0]
+        if row_count > 0:
+            # Questions already fetched — skip API phase, go straight to
+            # full-text fetching for remaining truncated questions
+            logger.info("Checkpoint has %d questions — skipping API fetch, "
+                        "continuing full-text fetching", row_count)
+            return _fetch_full_text_batch(conn, max_full_text)
     else:
         conn = schema_module.create_database_with_tables(
             output_path, schema_path, TABLE_NAMES,
@@ -329,48 +348,85 @@ def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=No
         insert_questions(conn, filtered, timestamp_millis)
         logger.info("Saved %d questions to DB (truncated text pending for some)", len(filtered))
 
-    # Pitfall 4: fetch full text for truncated questions/answers (parallelised)
-    # and update the DB incrementally as each full text arrives
-    truncated = [q for q in filtered
-                 if len(q.get("questionText", "")) >= 255
-                 or len(q.get("answerText", "")) >= 255]
-    logger.info("Fetching full text for %d truncated questions (parallel, 10 workers)",
-                len(truncated))
-
-    update_q_sql = "UPDATE written_questions SET questionText = ? WHERE id = ?"
-    update_a_sql = "UPDATE written_questions SET answerText = ? WHERE id = ?"
-    done_count = 0
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_q = {
-            executor.submit(fetch_full_question_text, q["id"]): q
-            for q in truncated
-        }
-        for future in as_completed(future_to_q):
-            q = future_to_q[future]
-            try:
-                full_qtext, full_atext = future.result()
-                if full_qtext:
-                    q["questionText"] = full_qtext
-                    conn.execute(update_q_sql, (full_qtext, q["id"]))
-                if full_atext:
-                    q["answerText"] = full_atext
-                    conn.execute(update_a_sql, (full_atext, q["id"]))
-                conn.commit()
-            except Exception as e:
-                logger.warning("Failed to fetch full text for question %s: %s", q.get("id"), e)
-            done_count += 1
-            if done_count % 100 == 0:
-                logger.info("Full text progress: %d/%d (%.0f%%)",
-                            done_count, len(truncated),
-                            100.0 * done_count / len(truncated))
-
-    logger.info("Full text fetching complete: %d/%d done", done_count, len(truncated))
+    # Full-text fetching (possibly batched)
+    more_work = _fetch_full_text_batch(conn, max_full_text)
 
     logger.info("VACUUMing database to minimize file size...")
     conn.execute("VACUUM")
 
     conn.close()
     logger.info("Seed build complete: %s", output_path)
+    return more_work
+
+
+def _fetch_full_text_batch(conn, max_full_text=None):
+    """Fetch full text for truncated questions, optionally batched.
+
+    If max_full_text is set, processes at most that many truncated questions
+    and returns True if more remain. If None, processes all (legacy behavior).
+
+    On checkpoint resume, queries the DB for questions that still have
+    truncated text (len >= 255) and fetches full text for them.
+    """
+    # Find truncated questions from the DB (works for both fresh insert and
+    # checkpoint resume)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id FROM written_questions "
+        "WHERE length(questionText) >= 255 OR length(answerText) >= 255 "
+        "ORDER BY id"
+    )
+    truncated_ids = [row[0] for row in cursor.fetchall()]
+    logger.info("Fetching full text for %d truncated questions (parallel, 10 workers)",
+                len(truncated_ids))
+
+    if not truncated_ids:
+        return False
+
+    # Apply batch limit
+    if max_full_text is not None and max_full_text > 0:
+        batch = truncated_ids[:max_full_text]
+        more_after_batch = len(truncated_ids) > max_full_text
+        logger.info("Batch limit: processing %d/%d truncated questions",
+                    len(batch), len(truncated_ids))
+    else:
+        batch = truncated_ids
+        more_after_batch = False
+
+    update_q_sql = "UPDATE written_questions SET questionText = ? WHERE id = ?"
+    update_a_sql = "UPDATE written_questions SET answerText = ? WHERE id = ?"
+    done_count = 0
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_id = {
+            executor.submit(fetch_full_question_text, qid): qid
+            for qid in batch
+        }
+        for future in as_completed(future_to_id):
+            qid = future_to_id[future]
+            try:
+                full_qtext, full_atext = future.result()
+                if full_qtext:
+                    conn.execute(update_q_sql, (full_qtext, qid))
+                if full_atext:
+                    conn.execute(update_a_sql, (full_atext, qid))
+                conn.commit()
+            except Exception as e:
+                logger.warning("Failed to fetch full text for question %s: %s", qid, e)
+            done_count += 1
+            if done_count % 100 == 0:
+                logger.info("Full text progress: %d/%d (%.0f%%)",
+                            done_count, len(batch),
+                            100.0 * done_count / len(batch))
+
+    logger.info("Full text fetching complete: %d/%d done", done_count, len(batch))
+
+    if more_after_batch:
+        logger.info("Batch limit reached — %d truncated questions remain. "
+                    "Exit code 2 will signal CI to spawn next batch.",
+                    len(truncated_ids) - max_full_text)
+        return True
+
+    return False
 
 
 def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None):
@@ -500,14 +556,25 @@ def main():
         "--checkpoint-db",
         help="Path to a checkpoint DB to resume from (seed mode only). Upserts on top of existing data.",
     )
+    parser.add_argument(
+        "--max-full-text", type=int, default=None,
+        help="Maximum number of truncated questions to fetch full text for per run "
+             "(seed mode only). When the limit is reached, the checkpoint DB is saved "
+             "and the script exits with code 2 to signal that more work remains.",
+    )
     args = parser.parse_args()
 
     if args.mode == "delta" and not args.previous_db:
         parser.error("--previous-db is required for delta mode")
 
     if args.mode == "seed":
-        build_seed(args.output, args.schema, args.mps_db,
-                   mp_limit=args.mp_limit, checkpoint_db=args.checkpoint_db)
+        import sys
+        more_work = build_seed(args.output, args.schema, args.mps_db,
+                               mp_limit=args.mp_limit, checkpoint_db=args.checkpoint_db,
+                               max_full_text=args.max_full_text)
+        if more_work:
+            logger.info("More full-text work remains — exiting with code 2 for CI chain")
+            sys.exit(2)
     else:
         build_delta(args.output, args.previous_db, args.schema, args.mps_db,
                     mp_limit=args.mp_limit)
