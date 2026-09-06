@@ -107,6 +107,19 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
     )
     logger.info("Created %s with %d tables", output_path, len(all_table_names))
 
+    # Manual migration: add hasLinkedStatements + linkedStatementsJson columns
+    # to written_statements if the schema JSON hasn't been synced yet.
+    # The Room entity (WrittenStatementEntity) has these fields, but the
+    # schema JSON in this repo may lag behind the app repo.
+    ws_cols = [r[1] for r in conn.execute("PRAGMA table_info(written_statements)").fetchall()]
+    if "hasLinkedStatements" not in ws_cols:
+        conn.execute("ALTER TABLE written_statements ADD COLUMN hasLinkedStatements INTEGER NOT NULL DEFAULT 0")
+        logger.info("Schema migration: added hasLinkedStatements column to written_statements")
+    if "linkedStatementsJson" not in ws_cols:
+        conn.execute("ALTER TABLE written_statements ADD COLUMN linkedStatementsJson TEXT")
+        logger.info("Schema migration: added linkedStatementsJson column to written_statements")
+    conn.commit()
+
     # Map argument names to provided paths
     source_dbs = {
         "mps_db": mps_db,
