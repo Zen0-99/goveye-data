@@ -9,8 +9,8 @@ schema's Room identity hash.
 Per D-02: fetches the last 90 days of statements (hybrid storage — recent
 data in bundled DB, historical on-demand).
 
-Pitfall 4: the bulk API truncates text fields at 255 characters. For any
-statement where len(text) == 255, we fetch the full text from the individual
+Pitfall 4: the bulk API truncates text fields at ~258 characters. For any
+statement where len(text) >= 255, we fetch the full text from the individual
 endpoint GET {STATEMENTS_API}/{id}.
 
 Modes:
@@ -52,7 +52,8 @@ def fetch_written_statements(start_date, end_date):
 
     Returns:
         List of statement dicts with keys: id, memberId, memberRole, uin,
-        dateMade, answeringBodyId, answeringBodyName, title, text, house.
+        dateMade, answeringBodyId, answeringBodyName, title, text, house,
+        hasLinkedStatements, linkedStatements.
     """
     params = {"start": start_date, "end": end_date}
     logger.info("Fetching written statements: %s to %s", start_date, end_date)
@@ -72,6 +73,8 @@ def fetch_written_statements(start_date, end_date):
             "title": val.get("title", ""),
             "text": val.get("text", ""),
             "house": val.get("house", 1),
+            "hasLinkedStatements": val.get("hasLinkedStatements", False),
+            "linkedStatements": val.get("linkedStatements"),
         })
     logger.info("Fetched %d written statements", len(statements))
     return statements
@@ -80,20 +83,47 @@ def fetch_written_statements(start_date, end_date):
 def fetch_full_statement_text(statement_id):
     """Fetch the full text of a single statement from the individual endpoint.
 
-    Pitfall 4: the bulk API truncates text at 255 chars. When len(text) == 255,
+    Pitfall 4: the bulk API truncates text at ~258 chars. When len(text) >= 255,
     we fetch the full text from GET {STATEMENTS_API}/{id}.
+
+    The individual API returns HTML (<p>...</p>), so we strip it to plain text
+    using BeautifulSoup, preserving paragraph breaks.
 
     Args:
         statement_id: The Parliament statement ID.
 
     Returns:
-        The full text string, or empty string if the fetch fails.
+        The full text string (HTML-stripped), or empty string if the fetch fails.
     """
     try:
         r = api_get(f"{STATEMENTS_API}/{statement_id}", timeout=30)
         data = r.json()
         val = data.get("value", data)
-        return val.get("text", "")
+        text = val.get("text", "")
+        if not text:
+            return ""
+        # Strip HTML to plain text, preserving paragraph breaks
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(text, "html.parser")
+        for tag in soup.find_all(["p", "h1", "h2", "h3", "h4", "h5", "h6"]):
+            tag.insert_before("\n\n")
+            tag.insert_after("\n\n")
+        for br in soup.find_all("br"):
+            br.replace_with("\n")
+        plain = soup.get_text()
+        # Collapse excessive blank lines
+        lines = plain.split("\n")
+        cleaned = []
+        blank_count = 0
+        for line in lines:
+            if line.strip() == "":
+                blank_count += 1
+                if blank_count <= 2:
+                    cleaned.append("")
+            else:
+                blank_count = 0
+                cleaned.append(line.strip())
+        return "\n".join(cleaned).strip()
     except Exception as e:
         logger.warning("Failed to fetch full text for statement %s: %s", statement_id, e)
         return ""
@@ -106,8 +136,15 @@ def map_statement_to_entity(stmt, timestamp_millis):
 
     Matches WrittenStatementEntity fields:
     (id, memberId, memberRole, uin, dateMade, answeringBodyId,
-     answeringBodyName, title, text, house, lastUpdated)
+     answeringBodyName, title, text, house, lastUpdated,
+     hasLinkedStatements, linkedStatementsJson)
     """
+    has_linked = stmt.get("hasLinkedStatements", False)
+    linked_json = None
+    if has_linked and stmt.get("linkedStatements"):
+        import json
+        linked_json = json.dumps(stmt["linkedStatements"])
+
     return (
         stmt.get("id") or 0,
         stmt.get("memberId") or 0,
@@ -120,6 +157,8 @@ def map_statement_to_entity(stmt, timestamp_millis):
         stmt.get("text") or "",
         stmt.get("house") or 1,
         timestamp_millis,
+        1 if has_linked else 0,
+        linked_json,
     )
 
 
@@ -132,8 +171,9 @@ def insert_statements(conn, statements, timestamp_millis):
     insert_sql = """
         INSERT OR REPLACE INTO written_statements (
             id, memberId, memberRole, uin, dateMade, answeringBodyId,
-            answeringBodyName, title, text, house, lastUpdated
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            answeringBodyName, title, text, house, lastUpdated,
+            hasLinkedStatements, linkedStatementsJson
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     rows = [map_statement_to_entity(stmt, timestamp_millis) for stmt in statements]
@@ -178,11 +218,13 @@ def build_seed(output_path, schema_path, days=90, checkpoint_db=None):
 
     statements = fetch_written_statements(start_date, end_date)
 
-    # Pitfall 4: fetch full text for truncated statements
+    # Pitfall 4: fetch full text for truncated statements.
+    # The bulk API truncates text at ~258 chars (was 255 in older API versions).
+    # Use >= 255 to catch all truncation lengths.
     for stmt in statements:
         text = stmt.get("text", "")
-        if len(text) == 255:
-            logger.info("Statement %s text truncated at 255 chars — fetching full text", stmt.get("id"))
+        if len(text) >= 255:
+            logger.info("Statement %s text truncated at %d chars — fetching full text", stmt.get("id"), len(text))
             full_text = fetch_full_statement_text(stmt["id"])
             if full_text:
                 stmt["text"] = full_text
@@ -216,11 +258,13 @@ def build_delta(output_path, previous_db, schema_path, days=90):
 
     statements = fetch_written_statements(start_date, end_date)
 
-    # Pitfall 4: fetch full text for truncated statements
+    # Pitfall 4: fetch full text for truncated statements.
+    # The bulk API truncates text at ~258 chars (was 255 in older API versions).
+    # Use >= 255 to catch all truncation lengths.
     for stmt in statements:
         text = stmt.get("text", "")
-        if len(text) == 255:
-            logger.info("Statement %s text truncated at 255 chars — fetching full text", stmt.get("id"))
+        if len(text) >= 255:
+            logger.info("Statement %s text truncated at %d chars — fetching full text", stmt.get("id"), len(text))
             full_text = fetch_full_statement_text(stmt["id"])
             if full_text:
                 stmt["text"] = full_text

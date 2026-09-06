@@ -239,11 +239,15 @@ class TestSeedBuild(unittest.TestCase):
         count = c.execute("SELECT COUNT(*) FROM government_publications").fetchone()[0]
         self.assertEqual(count, 2)
 
-        # Verify D-03: body text NOT in government_publications table
+        # Verify bodyText IS in government_publications table (D-03 updated)
         cols = [desc[1] for desc in c.execute("SELECT * FROM government_publications LIMIT 0").description]
-        self.assertNotIn("body", cols)
+        self.assertIn("bodyText", cols)
 
-        # Verify body text IS in _publication_bodies temp table
+        # Verify bodyText is populated
+        body_count = c.execute("SELECT COUNT(*) FROM government_publications WHERE bodyText IS NOT NULL AND bodyText != ''").fetchone()[0]
+        self.assertGreaterEqual(body_count, 1)
+
+        # Verify body text IS also in _publication_bodies temp table (backup for tag matching)
         body_count = c.execute("SELECT COUNT(*) FROM _publication_bodies").fetchone()[0]
         self.assertEqual(body_count, 2)
 

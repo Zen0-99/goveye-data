@@ -7,10 +7,10 @@ Fetches government publications from GOV.UK using a two-step process:
 
 Per D-01: all document types captured (no filtering by document_type).
 Per D-02: fetches the last 90 days of publications (hybrid storage).
-Per D-03: body text is fetched for tag matching at build time but NOT stored
-in the shipped entity tuple. Body text is stored in a separate temp table
-(_publication_bodies) that merge_dbs.py copies into goveye.db for build_tags.py
-to use, and is dropped before shipping.
+Per D-03: body text is fetched and stored in the government_publications.bodyText
+column (HTML-stripped plain text) so the app can display full publication content
+without linking out to GOV.UK. A copy is also kept in _publication_bodies for
+build-time tag matching by build_tags.py, and is dropped before shipping.
 
 Pitfall 6: GOV.UK body text is in Govspeak/HTML format. BeautifulSoup is used
 to strip HTML before tag matching (direct regex on raw HTML matches tags/
@@ -211,15 +211,15 @@ def strip_html_for_tag_matching(html_text):
 
 # --- Mapping + insertion ---
 
-def map_publication_to_entity(search_item, content_details, timestamp_millis, pub_id):
+def map_publication_to_entity(search_item, content_details, timestamp_millis, pub_id, body_text=""):
     """Map a publication to a government_publications row tuple.
 
-    Per D-03: body text is NOT included in the entity tuple. It is stored
-    separately in _publication_bodies for build-time tag matching.
+    Includes bodyText (HTML-stripped plain text from the Content API) so the
+    app can display the full letter without linking out to GOV.UK.
 
     Matches GovernmentPublicationEntity fields:
     (id, title, summary, url, documentType, organisation, organisationSlug,
-     firstPublishedAt, publicUpdatedAt, imageUrl, lastUpdated)
+     firstPublishedAt, publicUpdatedAt, imageUrl, bodyText, lastUpdated)
 
     Args:
         search_item: Dict from the Search API.
@@ -283,6 +283,7 @@ def map_publication_to_entity(search_item, content_details, timestamp_millis, pu
         first_published,
         public_updated,
         image_url,
+        body_text,
         timestamp_millis,
     )
 
@@ -290,9 +291,13 @@ def map_publication_to_entity(search_item, content_details, timestamp_millis, pu
 def insert_publications(conn, publications, bodies, timestamp_millis):
     """Insert publications into government_publications + _publication_bodies.
 
+    bodyText is now included in the entity tuple and stored in
+    government_publications.bodyText. The _publication_bodies temp table
+    is kept as a backup for build_tags.py and dropped before shipping.
+
     Args:
         conn: SQLite connection.
-        publications: List of entity tuples (without body).
+        publications: List of entity tuples (with bodyText).
         bodies: Dict mapping pub_id -> stripped body text.
         timestamp_millis: Build timestamp.
     """
@@ -309,8 +314,8 @@ def insert_publications(conn, publications, bodies, timestamp_millis):
     insert_sql = """
         INSERT OR REPLACE INTO government_publications (
             id, title, summary, url, documentType, organisation, organisationSlug,
-            firstPublishedAt, publicUpdatedAt, imageUrl, lastUpdated
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            firstPublishedAt, publicUpdatedAt, imageUrl, bodyText, lastUpdated
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     for i in range(0, len(publications), BATCH_SIZE):
@@ -422,7 +427,7 @@ def build_seed(output_path, schema_path, days=90, checkpoint_db=None):
             raw_body = details.get("body", "")
             stripped_body = strip_html_for_tag_matching(raw_body)
 
-            entity = map_publication_to_entity(item, content_details, timestamp_millis, next_id)
+            entity = map_publication_to_entity(item, content_details, timestamp_millis, next_id, stripped_body)
             org_publications.append(entity)
             if stripped_body:
                 org_bodies[next_id] = stripped_body
@@ -488,7 +493,7 @@ def build_delta(output_path, previous_db, schema_path, days=90):
             raw_body = details.get("body", "")
             stripped_body = strip_html_for_tag_matching(raw_body)
 
-            entity = map_publication_to_entity(item, content_details, timestamp_millis, next_id)
+            entity = map_publication_to_entity(item, content_details, timestamp_millis, next_id, stripped_body)
             all_publications.append(entity)
             if stripped_body:
                 all_bodies[next_id] = stripped_body
