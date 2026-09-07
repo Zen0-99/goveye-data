@@ -1,0 +1,107 @@
+name: Backfill Publication BodyText
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_rows:
+        description: 'Max rows to process (0 = all, use for testing)'
+        required: false
+        default: '0'
+      offset:
+        description: 'Skip first N rows (for resuming across multiple runs)'
+        required: false
+        default: '0'
+
+permissions:
+  contents: write
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 58
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Sync schema from GovEye
+        run: python sync_schema.py
+
+      - name: Download previous DB and manifest
+        id: download_prev
+        run: |
+          gh release download gov-publications-latest \
+            --pattern gov_publications.db --output prev_gov_publications.db || echo "No previous DB"
+          gh release download gov-publications-latest \
+            --pattern manifest.json --output prev_manifest.json || echo "No previous manifest"
+          if [ -f prev_gov_publications.db ]; then
+            echo "has_previous=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_previous=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Copy DB for backfill
+        run: cp prev_gov_publications.db gov_publications.db
+
+      - name: Run bodyText backfill
+        run: |
+          python backfill_bodytext.py \
+            --db gov_publications.db \
+            --batch-size 500 \
+            --max-rows ${{ github.event.inputs.max_rows }} \
+            --offset ${{ github.event.inputs.offset }}
+
+      - name: Count results
+        run: |
+          python -c "
+          import sqlite3
+          c = sqlite3.connect('gov_publications.db')
+          total = c.execute('SELECT COUNT(*) FROM government_publications').fetchone()[0]
+          with_body = c.execute('SELECT COUNT(*) FROM government_publications WHERE bodyText IS NOT NULL AND bodyText != \"\"').fetchone()[0]
+          print(f'Total: {total}, with bodyText: {with_body}, without: {total - with_body}')
+          "
+
+      - name: Generate full upsert patch
+        run: |
+          python diff_db.py \
+            --new gov_publications.db \
+            --previous prev_gov_publications.db \
+            --schema schemas/bundled_schema.json \
+            --output patch.json \
+            --tables government_publications \
+            --full-upsert-tables government_publications
+
+      - name: Generate manifest
+        run: |
+          python manifest.py \
+            --db gov_publications.db \
+            --patch patch.json \
+            --output manifest.json \
+            --schema schemas/bundled_schema.json \
+            --previous-manifest prev_manifest.json
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: gov-publications-latest
+          name: Gov Publications Latest
+          body: |
+            Government Publications database update — bodyText backfill.
+
+            - **gov_publications.db**: Per-API SQLite database (GOV.UK publications)
+            - **patch.json**: Full upsert patch (bodyText backfill)
+            - **manifest.json**: Version, SHA-256 hashes, and file sizes
+          files: |
+            gov_publications.db
+            patch.json
+            manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
