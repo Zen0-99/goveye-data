@@ -33,7 +33,16 @@ jobs:
       - name: Sync schema from GovEye
         run: python sync_schema.py
 
-      - name: Download previous DB and manifest
+      - name: Download full seed DB
+        run: |
+          gh release download seed-latest \
+            --pattern goveye.db --output goveye_seed.db
+          echo "Seed DB downloaded"
+          ls -lh goveye_seed.db
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download previous per-API DB and manifest
         id: download_prev
         run: |
           gh release download gov-publications-latest \
@@ -48,8 +57,38 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Copy DB for backfill
-        run: cp prev_gov_publications.db gov_publications.db
+      - name: Extract government_publications from seed DB
+        run: |
+          python -c "
+          import sqlite3, shutil
+          # Create a new per-API DB from the seed DB's government_publications table
+          shutil.copy2('prev_gov_publications.db', 'gov_publications.db') if __import__('os').path.exists('prev_gov_publications.db') else None
+          # Attach seed DB and copy all government_publications rows
+          conn = sqlite3.connect('gov_publications.db')
+          conn.execute('ATTACH DATABASE \"goveye_seed.db\" AS seed')
+          # Get all publications from seed that aren't in per-API DB
+          count = conn.execute('SELECT COUNT(*) FROM seed.government_publications').fetchone()[0]
+          print(f'Seed DB has {count} publications')
+          # Replace all rows with seed DB rows (preserving bodyText where it exists)
+          conn.execute('DELETE FROM government_publications')
+          conn.execute('''
+            INSERT INTO government_publications
+            SELECT * FROM seed.government_publications
+          ''')
+          conn.commit()
+          conn.close()
+          print('Extracted government_publications from seed DB')
+          "
+
+      - name: Count before backfill
+        run: |
+          python -c "
+          import sqlite3
+          c = sqlite3.connect('gov_publications.db')
+          total = c.execute('SELECT COUNT(*) FROM government_publications').fetchone()[0]
+          with_body = c.execute('SELECT COUNT(*) FROM government_publications WHERE bodyText IS NOT NULL AND bodyText != \"\"').fetchone()[0]
+          print(f'Before backfill: {total} total, {with_body} with bodyText, {total - with_body} missing')
+          "
 
       - name: Run bodyText backfill
         run: |
@@ -59,17 +98,18 @@ jobs:
             --max-rows ${{ github.event.inputs.max_rows }} \
             --offset ${{ github.event.inputs.offset }}
 
-      - name: Count results
+      - name: Count after backfill
         run: |
           python -c "
           import sqlite3
           c = sqlite3.connect('gov_publications.db')
           total = c.execute('SELECT COUNT(*) FROM government_publications').fetchone()[0]
           with_body = c.execute('SELECT COUNT(*) FROM government_publications WHERE bodyText IS NOT NULL AND bodyText != \"\"').fetchone()[0]
-          print(f'Total: {total}, with bodyText: {with_body}, without: {total - with_body}')
+          print(f'After backfill: {total} total, {with_body} with bodyText, {total - with_body} missing')
           "
 
       - name: Generate full upsert patch
+        if: steps.download_prev.outputs.has_previous == 'true'
         run: |
           python diff_db.py \
             --new gov_publications.db \
@@ -80,6 +120,7 @@ jobs:
             --full-upsert-tables government_publications
 
       - name: Generate manifest
+        if: steps.download_prev.outputs.has_previous == 'true'
         run: |
           python manifest.py \
             --db gov_publications.db \
@@ -89,15 +130,16 @@ jobs:
             --previous-manifest prev_manifest.json
 
       - name: Publish to GitHub Releases
+        if: steps.download_prev.outputs.has_previous == 'true'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: gov-publications-latest
           name: Gov Publications Latest
           body: |
-            Government Publications database update — bodyText backfill.
+            Government Publications database update — bodyText backfill from full seed DB.
 
-            - **gov_publications.db**: Per-API SQLite database (GOV.UK publications)
-            - **patch.json**: Full upsert patch (bodyText backfill)
+            - **gov_publications.db**: Per-API SQLite database (all publications from seed)
+            - **patch.json**: Full upsert patch (bodyText backfill for all publications)
             - **manifest.json**: Version, SHA-256 hashes, and file sizes
           files: |
             gov_publications.db
