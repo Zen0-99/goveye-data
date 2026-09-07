@@ -98,12 +98,12 @@ jobs:
       - name: Generate diff patch
         if: steps.download_prev.outputs.has_previous == 'true'
         run: |
-          python diff_db.py --new member_details.db --previous prev_member_details.db --schema schemas/bundled_schema.json --output patch.json --tables mp_synopsis,mp_contacts,mp_experience
+          python diff_db.py --new member_details.db --previous prev_member_details.db --schema schemas/bundled_schema.json --output patch.json --tables mp_synopsis,mp_contacts,mp_experience,mp_career_events
 
       - name: Generate diff patch (first run)
         if: steps.download_prev.outputs.has_previous != 'true'
         run: |
-          python diff_db.py --new member_details.db --schema schemas/bundled_schema.json --output patch.json --tables mp_synopsis,mp_contacts,mp_experience
+          python diff_db.py --new member_details.db --schema schemas/bundled_schema.json --output patch.json --tables mp_synopsis,mp_contacts,mp_experience,mp_career_events
 
       - name: Generate manifest
         if: steps.download_prev.outputs.has_previous == 'true'
@@ -121,9 +121,9 @@ jobs:
           tag_name: member-details-latest
           name: Member Details Latest
           body: |
-            MP synopsis, contacts, and experience data update for GovEye (weekly).
+            MP synopsis, contacts, experience, and career events data update for GovEye (weekly).
 
-            - **member_details.db**: Per-API SQLite database (mp_synopsis, mp_contacts, mp_experience tables)
+            - **member_details.db**: Per-API SQLite database (mp_synopsis, mp_contacts, mp_experience, mp_career_events tables)
             - **patch.json**: Incremental diff patch
             - **manifest.json**: Version, SHA-256 hashes, and file sizes
 

@@ -67,14 +67,18 @@ CREATE_TABLE_SQL = """
 # --- MP ID fetching ---
 
 def fetch_mp_ids_from_db(mps_db_path):
-    """Read all MP IDs from the mps.db file."""
+    """Read all MP IDs and names from the mps.db file.
+
+    Returns a list of (id, name) tuples so we can log human-readable
+    names alongside IDs for false-positive detection.
+    """
     conn = sqlite3.connect(mps_db_path)
     cursor = conn.cursor()
-    cursor.execute("SELECT id FROM mps ORDER BY id")
-    mp_ids = [row[0] for row in cursor.fetchall()]
+    cursor.execute("SELECT id, nameListAs FROM mps ORDER BY id")
+    mp_data = [(row[0], row[1] if len(row) > 1 else "?") for row in cursor.fetchall()]
     conn.close()
-    logger.info("Read %d MP IDs from %s", len(mp_ids), mps_db_path)
-    return mp_ids
+    logger.info("Read %d MP IDs from %s", len(mp_data), mps_db_path)
+    return mp_data
 
 
 # --- Wikidata SPARQL ---
@@ -99,13 +103,18 @@ def run_sparql_query(query):
         return None
 
 
-def fetch_qids_for_mp_ids(mp_ids):
+def fetch_qids_for_mp_ids(mp_data):
     """Batch-query Wikidata for QIDs matching parliament.uk member IDs (P10428).
 
-    Returns a dict mapping mp_id (int) -> wikidata_qid (str).
+    Args:
+        mp_data: List of (mp_id, mp_name) tuples.
+
+    Returns a dict mapping mp_id (int) -> (wikidata_qid (str), mp_name (str)).
     MPs without a Wikidata item are simply absent from the dict.
     """
     qid_map = {}
+    id_to_name = {mp_id: name for mp_id, name in mp_data}
+    mp_ids = [mp_id for mp_id, _ in mp_data]
     total = len(mp_ids)
 
     for i in range(0, total, QID_LOOKUP_BATCH):
@@ -127,6 +136,7 @@ SELECT ?item ?parlId WHERE {{
             continue
 
         bindings = results.get("results", {}).get("bindings", [])
+        batch_matches = 0
         for binding in bindings:
             qid = binding.get("item", {}).get("value", "").split("/")[-1]
             parl_id_str = binding.get("parlId", {}).get("value", "")
@@ -134,17 +144,32 @@ SELECT ?item ?parlId WHERE {{
                 parl_id = int(parl_id_str)
             except (ValueError, TypeError):
                 continue
-            qid_map[parl_id] = qid
+            mp_name = id_to_name.get(parl_id, "?")
+            qid_map[parl_id] = (qid, mp_name)
+            batch_matches += 1
 
         logger.info("  Found %d QIDs in this batch (running total: %d)",
-                     len(bindings), len(qid_map))
+                     batch_matches, len(qid_map))
 
-    logger.info("Matched %d / %d MPs to Wikidata QIDs via P10428", len(qid_map), total)
+    matched = len(qid_map)
+    unmatched = total - matched
+    logger.info("Matched %d / %d MPs to Wikidata QIDs via P10428 (%d unmatched)",
+                matched, total, unmatched)
+
+    if unmatched > 0:
+        unmatched_names = [id_to_name[mid] for mid in mp_ids if mid not in qid_map]
+        logger.info("Unmatched MPs (first 20): %s",
+                    ", ".join(unmatched_names[:20]))
+
     return qid_map
 
 
-def fetch_career_statements(qids):
+def fetch_career_statements(qids, qid_to_mp_name):
     """Fetch education (P69) and occupation (P106) statements for a batch of QIDs.
+
+    Args:
+        qids: List of Wikidata QID strings.
+        qid_to_mp_name: Dict mapping QID -> MP name for logging.
 
     Returns a list of dicts, each with keys:
         qid, category, value_label, start_time, end_time, subject_label
@@ -186,15 +211,28 @@ SELECT ?item ?prop ?value ?valueLabel ?startTime ?endTime ?subject ?subjectLabel
     bindings = results.get("results", {}).get("bindings", [])
     for binding in bindings:
         qid = binding.get("item", {}).get("value", "").split("/")[-1]
-        statements.append({
+        category = binding.get("prop", {}).get("value")
+        name = (binding.get("valueLabel", {}).get("value")
+                or binding.get("value", {}).get("value", "").split("/")[-1])
+        stmt = {
             "qid": qid,
-            "category": binding.get("prop", {}).get("value"),
-            "name": binding.get("valueLabel", {}).get("value")
-                    or binding.get("value", {}).get("value", "").split("/")[-1],
+            "category": category,
+            "name": name,
             "start_time": binding.get("startTime", {}).get("value"),
             "end_time": binding.get("endTime", {}).get("value"),
             "subject": binding.get("subjectLabel", {}).get("value"),
-        })
+        }
+        statements.append(stmt)
+
+        # Log each statement for false-positive detection
+        mp_name = qid_to_mp_name.get(qid, "?")
+        date_range = ""
+        if stmt["start_time"] or stmt["end_time"]:
+            s = format_wikidata_date(stmt["start_time"]) or "?"
+            e = format_wikidata_date(stmt["end_time"]) or "present"
+            date_range = f" [{s} → {e}]"
+        subject = f" ({stmt['subject']})" if stmt["subject"] else ""
+        logger.info("    %s: %s = %s%s%s", mp_name, category, name, subject, date_range)
 
     logger.info("  Retrieved %d career statements for %d QIDs", len(statements), len(qids))
     return statements
@@ -277,22 +315,29 @@ def create_fresh_db(output_path):
 
 # --- Build ---
 
-def fetch_all_career_data(mp_ids, conn, timestamp_millis):
-    """Fetch career data for all MP IDs and insert into the DB.
+def fetch_all_career_data(mp_data, conn, timestamp_millis):
+    """Fetch career data for all MPs and insert into the DB.
+
+    Args:
+        mp_data: List of (mp_id, mp_name) tuples.
+        conn: SQLite connection.
+        timestamp_millis: Timestamp for lastUpdated column.
 
     Returns (processed_count, skipped_count).
     """
     # 1. Batch-fetch QIDs for all MPs
-    qid_map = fetch_qids_for_mp_ids(mp_ids)
+    qid_map = fetch_qids_for_mp_ids(mp_data)
     if not qid_map:
         logger.warning("No Wikidata QIDs found for any MP — nothing to do")
-        return 0, len(mp_ids)
+        return 0, len(mp_data)
 
-    # Build reverse map: qid -> mp_id
-    mp_for_qid = {qid: mp_id for mp_id, qid in qid_map.items()}
+    # Build reverse maps: qid -> mp_id, qid -> mp_name
+    mp_for_qid = {qid: mp_id for mp_id, (qid, _) in qid_map.items()}
+    qid_to_mp_name = {qid: name for _, (qid, name) in qid_map.items()}
 
     # 2. Batch-fetch career statements for QIDs
     all_qids = list(qid_map.values())
+    all_qids = [qid for qid, _ in all_qids]
     processed = 0
     skipped = 0
     pending_rows = []
@@ -302,7 +347,7 @@ def fetch_all_career_data(mp_ids, conn, timestamp_millis):
         logger.info("Fetching career data for QIDs %d-%d/%d...",
                      i, min(i + STATEMENT_BATCH, len(all_qids)), len(all_qids))
 
-        statements = fetch_career_statements(batch_qids)
+        statements = fetch_career_statements(batch_qids, qid_to_mp_name)
 
         for stmt in statements:
             mp_id = mp_for_qid.get(stmt["qid"])
@@ -323,7 +368,7 @@ def fetch_all_career_data(mp_ids, conn, timestamp_millis):
         insert_career_events(conn, pending_rows)
         processed += len(pending_rows)
 
-    skipped = len(mp_ids) - len(qid_map)
+    skipped = len(mp_data) - len(qid_map)
     return processed, skipped
 
 
@@ -345,14 +390,14 @@ def build_seed(output_path, mps_db, mp_limit=None, checkpoint_db=None):
         conn = create_fresh_db(output_path)
         processed_mp_ids = set()
 
-    mp_ids = fetch_mp_ids_from_db(mps_db)
+    mp_data = fetch_mp_ids_from_db(mps_db)
     if mp_limit:
-        mp_ids = mp_ids[:mp_limit]
+        mp_data = mp_data[:mp_limit]
 
     # Filter out already-processed MPs (checkpoint resume)
-    remaining = [mid for mid in mp_ids if mid not in processed_mp_ids]
-    if len(remaining) < len(mp_ids):
-        logger.info("Skipping %d already-processed MPs", len(mp_ids) - len(remaining))
+    remaining = [(mid, name) for mid, name in mp_data if mid not in processed_mp_ids]
+    if len(remaining) < len(mp_data):
+        logger.info("Skipping %d already-processed MPs", len(mp_data) - len(remaining))
 
     processed, skipped = fetch_all_career_data(remaining, conn, timestamp_millis)
 
@@ -372,11 +417,11 @@ def build_delta(output_path, previous_db, mps_db, mp_limit=None):
     conn.execute(CREATE_TABLE_SQL)
     conn.commit()
 
-    mp_ids = fetch_mp_ids_from_db(mps_db)
+    mp_data = fetch_mp_ids_from_db(mps_db)
     if mp_limit:
-        mp_ids = mp_ids[:mp_limit]
+        mp_data = mp_data[:mp_limit]
 
-    processed, skipped = fetch_all_career_data(mp_ids, conn, timestamp_millis)
+    processed, skipped = fetch_all_career_data(mp_data, conn, timestamp_millis)
 
     logger.info("VACUUMing database...")
     conn.execute("VACUUM")
