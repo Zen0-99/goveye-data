@@ -31,6 +31,7 @@ import shutil
 import sqlite3
 import time
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
@@ -502,6 +503,41 @@ def build_delta(output_path, previous_db, schema_path, days=90):
 
     if all_publications:
         insert_publications(conn, all_publications, all_bodies, timestamp_millis)
+
+    # ── Gradual bodyText backfill ──────────────────────────────────────
+    # Each delta run also backfills bodyText for N older publications that
+    # have null/empty bodyText. Over time (4x daily), all publications
+    # will get bodyText without requiring a massive one-time build.
+    BACKFILL_BATCH = 500
+    cursor.execute(
+        "SELECT id, url FROM government_publications "
+        "WHERE (bodyText IS NULL OR bodyText = '') "
+        "AND url LIKE '%/government/publications/%' "
+        "ORDER BY id LIMIT ?", (BACKFILL_BATCH,)
+    )
+    backfill_rows = cursor.fetchall()
+    if backfill_rows:
+        logger.info("Backfilling bodyText for %d older publications...", len(backfill_rows))
+        backfilled = 0
+        for pub_id, url in backfill_rows:
+            try:
+                path = urlparse(url).path if "://" in url else url
+                content_details = fetch_publication_details(path.lstrip("/"))
+                details = (content_details or {}).get("details", {})
+                body_html = details.get("body", "") or details.get("govspeak", "")
+                if not body_html:
+                    continue
+                formatted = strip_html_for_tag_matching(body_html)
+                if formatted:
+                    cursor.execute(
+                        "UPDATE government_publications SET bodyText = ? WHERE id = ?",
+                        (formatted, pub_id)
+                    )
+                    backfilled += 1
+            except Exception as e:
+                logger.warning("Backfill failed for id=%s: %s", pub_id, e)
+        conn.commit()
+        logger.info("Backfilled bodyText for %d/%d publications", backfilled, len(backfill_rows))
 
     logger.info("VACUUMing database to minimize file size...")
     conn.execute("VACUUM")
