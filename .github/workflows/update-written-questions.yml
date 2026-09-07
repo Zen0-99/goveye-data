@@ -428,7 +428,7 @@ jobs:
     needs: [prepare, seed-batch-1, seed-batch-2, seed-batch-3, seed-batch-4, seed-batch-5, seed-batch-6]
     if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
 

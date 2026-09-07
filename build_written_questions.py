@@ -59,6 +59,8 @@ def fetch_full_question_text(question_id):
     Also fetches the full answerText if the bulk answerText is truncated
     (len >= 255). The individual endpoint returns the complete answerText.
 
+    Includes retry with backoff for 429 (Too Many Requests) responses.
+
     Args:
         question_id: The Parliament question ID.
 
@@ -66,14 +68,23 @@ def fetch_full_question_text(question_id):
         Tuple of (question_text, answer_text) — full text strings,
         or ("", "") if the fetch fails.
     """
-    try:
-        r = api_get(f"{QUESTIONS_API}/{question_id}", timeout=30)
-        data = r.json()
-        val = data.get("value", data)
-        return val.get("text", ""), val.get("answerText", "")
-    except Exception as e:
-        logger.warning("Failed to fetch full text for question %s: %s", question_id, e)
-        return "", ""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            r = api_get(f"{QUESTIONS_API}/{question_id}", timeout=30)
+            data = r.json()
+            val = data.get("value", data)
+            return val.get("text", ""), val.get("answerText", "")
+        except Exception as e:
+            if "429" in str(e) and attempt < max_retries - 1:
+                wait = 2 ** (attempt + 1)  # 2s, 4s, 8s
+                logger.warning("429 rate limit for question %s, retrying in %ds (attempt %d/%d)",
+                               question_id, wait, attempt + 1, max_retries)
+                time.sleep(wait)
+                continue
+            logger.warning("Failed to fetch full text for question %s: %s", question_id, e)
+            return "", ""
+    return "", ""
 
 
 def _parse_question(val):
@@ -481,10 +492,25 @@ def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None):
         logger.info("Saved %d questions to DB (truncated text pending for some)", len(filtered))
 
     # Pitfall 4: fetch full text for truncated questions/answers (parallelised)
-    # and update the DB incrementally as each full text arrives
+    # and update the DB incrementally as each full text arrives.
+    #
+    # In delta mode, only fetch full text for questions that are NEW or whose
+    # text is still truncated in the DB. Questions already in the DB with full
+    # text (len < 255) are skipped to avoid re-fetching the entire corpus
+    # every run (which causes 429 rate limits and 30min CI timeouts).
+    existing_full_ids = {
+        row[0] for row in conn.execute(
+            "SELECT id FROM written_questions "
+            "WHERE length(questionText) < 255 AND length(answerText) < 255"
+        ).fetchall()
+    }
+    logger.info("Skipping full-text fetch for %d questions already in DB with full text",
+                len(existing_full_ids))
+
     truncated = [q for q in filtered
-                 if len(q.get("questionText", "")) >= 255
-                 or len(q.get("answerText", "")) >= 255]
+                 if q["id"] not in existing_full_ids
+                 and (len(q.get("questionText", "")) >= 255
+                      or len(q.get("answerText", "")) >= 255)]
     logger.info("Fetching full text for %d truncated questions (parallel, 10 workers)",
                 len(truncated))
 

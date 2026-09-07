@@ -43,6 +43,10 @@ TABLE_PRIMARY_KEYS = {
     "recess_dates_meta": ["id"],
     "mp_notification_prefs": ["mpId"],
     "debate_speeches": ["debateGid", "speechGid"],
+    "mp_career_events": ["id"],
+    "mp_synopsis": ["mpId"],
+    "mp_contacts": ["mpId", "typeId"],
+    "mp_experience": ["id"],
 }
 
 # Tables to skip in diffing (FTS virtual tables don't need diffing)
@@ -61,9 +65,15 @@ def get_table_rows(conn, table_name):
 
     SQLite stores Boolean values as INTEGER (0/1). The Kotlin entities use
     Boolean fields, and kotlinx.serialization expects true/false in JSON.
-    Convert any column whose name starts with 'is' and has value 0/1 to
-    a Python bool so json.dump emits true/false.
+    Convert any column whose name starts with 'is' or is a known boolean
+    column and has value 0/1 to a Python bool so json.dump emits true/false.
     """
+    # Known boolean columns that don't follow the 'is*' naming convention
+    known_bool_columns = {
+        "rectified",  # interests table
+        "hasLinkedStatements",  # written_statements table
+    }
+
     columns = get_table_columns(conn, table_name)
     cursor = conn.cursor()
     cursor.execute(f"SELECT * FROM {table_name}")
@@ -72,7 +82,12 @@ def get_table_rows(conn, table_name):
     for row in rows:
         d = dict(zip(columns, row))
         for col in columns:
-            if col.lower().startswith("is") and d[col] is not None:
+            is_bool_col = (
+                col.lower().startswith("is")
+                or col.lower().startswith("has")
+                or col in known_bool_columns
+            )
+            if is_bool_col and d[col] is not None:
                 if d[col] == 0 or d[col] == 1:
                     d[col] = bool(d[col])
         result.append(d)
