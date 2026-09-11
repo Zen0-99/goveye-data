@@ -142,18 +142,32 @@ def parse_mnis_member(member_elem):
     # <PreferredName><StartDate> which is the birth date (the name given
     # at birth, with a start date = DOB and end date = when the name
     # changed, e.g. upon marriage or honorific change).
+    #
+    # IMPORTANT: Only use this fallback when there are 2+ PreferredNames.
+    # With only 1 PreferredName, the StartDate is the election date, not
+    # the birth date. Also sanity-check the year (MPs must be 18+).
     dob = _normalize_date(_text(member_elem, "DateOfBirth"))
     if not dob:
         preferred_names = member_elem.findall(".//PreferredName")
-        earliest_start = None
-        for pn in preferred_names:
-            start_text = _text(pn, "StartDate")
-            if start_text:
-                normalized = _normalize_date(start_text)
-                if normalized and (earliest_start is None or normalized < earliest_start):
-                    earliest_start = normalized
-        if earliest_start:
-            dob = earliest_start
+        if len(preferred_names) >= 2:
+            earliest_start = None
+            for pn in preferred_names:
+                start_text = _text(pn, "StartDate")
+                if start_text:
+                    normalized = _normalize_date(start_text)
+                    if normalized and (earliest_start is None or normalized < earliest_start):
+                        earliest_start = normalized
+            if earliest_start:
+                dob = earliest_start
+
+    # Sanity check: reject implausible DOBs (MPs must be 18+, rarely 96+)
+    if dob:
+        try:
+            year = int(dob[:4])
+            if year < 1930 or year > 2008:
+                dob = None
+        except (ValueError, IndexError):
+            dob = None
 
     # Place of birth — nested in <BasicDetails>
     town_of_birth = None

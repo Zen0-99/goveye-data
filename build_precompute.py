@@ -12,14 +12,22 @@ Produces two precomputed tables via SQL aggregation (no API calls):
 
 This eliminates 5,500+ runtime DAO calls per profile open on Android.
 
+Activity score weights (must match ActivityScoreCalculator.kt):
+  votes 3.0, questions 2.5, speeches 2.5, finance 2.0 (total 10.0).
+  Self-performance scoring — questions/speeches as per-month rates,
+  finance as the rate-vs-average trait score (0-100) scaled to weight.
+  Committees removed from the score; committeeCount is still stored for
+  display and committeesPercentile is still computed.
+
 When NOT to run this script:
   This script recomputes MP statistics (activityScore, rebellionRate,
   voteParticipationRate, all *Percentile columns) from division_votes,
-  debate_speeches, and committees. If only a derived column's logic
-  changed (e.g. the activityScore weights, the rebellionRate formula),
-  do NOT run this script — run the SQL UPDATE directly against the
-  existing DB instead. The Room migration in GovEye's DatabaseModule.kt
-  contains the same SQL and handles the update on user devices.
+  debate_speeches, committees, interests, expenses, bio_data and
+  historical_members. If only a derived column's logic changed (e.g. the
+  activityScore weights, the rebellionRate formula), do NOT run this
+  script — run the SQL UPDATE directly against the existing DB instead.
+  The Room migration in GovEye's DatabaseModule.kt contains the same SQL
+  and handles the update on user devices.
 
   Note: this script has a --changed-apis flag that skips recomputation
   when source APIs haven't changed. But if the FORMULA changed, even
@@ -46,19 +54,18 @@ logging.basicConfig(
 logger = logging.getLogger("build_precompute")
 
 # ActivityScoreCalculator weights (must match ActivityScoreCalculator.kt)
-# Score is 0.0-10.0: votes 3.0, questions 2.5, speeches 2.5, committees 2.0
-# Self-performance scoring — no peer normalization.
+# Score is 0.0-10.0: votes 3.0, questions 2.5, speeches 2.5, finance 2.0
+# Self-performance scoring — no peer normalization for the score itself.
+# (Finance is rate-vs-average — the same trait score shown on the radar —
+#  scaled to the 2.0 weight, per ActivityScoreCalculator.kt.)
 VOTE_WEIGHT = 3.0
 QUESTIONS_WEIGHT = 2.5
 SPEECHES_WEIGHT = 2.5
-COMMITTEES_WEIGHT = 2.0
+FINANCE_WEIGHT = 2.0
 
 # Per-month rate that earns full marks for questions/speeches
 FULL_MARKS_QUESTIONS_PER_MONTH = 2.0
 FULL_MARKS_SPEECHES_PER_MONTH = 2.0
-
-# Total committee days that earn full marks
-FULL_MARKS_COMMITTEE_DAYS = 1000.0
 
 # Houses
 COMMONS = 1
@@ -72,16 +79,28 @@ DEFAULT_TENURE_START = "2016-01-01"
 def get_tenure_start(conn, member_id):
     """Determine the MP's tenure start date for tenure-aware metric calculation.
 
-    Tries bio_data.maidenSpeechDate first (reliable proxy for when the MP
-    started attending), then falls back to the earliest historical_members
-    startDate, then returns DEFAULT_TENURE_START ("2016-01-01") if neither
-    is available.
+    Source order matches StatsRepository (membershipStartDate → maidenSpeechDate
+    → historical_members → default) so the precomputed participation rate
+    matches the rate the app computes at runtime:
+      1. mps.membershipStartDate — current unbroken tenure
+      2. bio_data.maidenSpeechDate — when the MP started attending
+      3. earliest historical_members.startDate
+      4. DEFAULT_TENURE_START ("2016-01-01") if none is available
 
     Returns a date string in YYYY-MM-DD format (or DEFAULT_TENURE_START).
     """
     cursor = conn.cursor()
 
-    # Primary: maiden speech date from bio_data
+    # Primary: current unbroken membership start from mps
+    cursor.execute(
+        "SELECT membershipStartDate FROM mps WHERE id = ?",
+        (member_id,),
+    )
+    row = cursor.fetchone()
+    if row and row[0]:
+        return row[0][:10]
+
+    # Secondary: maiden speech date from bio_data
     cursor.execute(
         "SELECT maidenSpeechDate FROM bio_data WHERE mpId = ?",
         (member_id,),
@@ -117,40 +136,35 @@ def get_months_since_tenure_start(conn, member_id):
         return 12  # fallback
 
 
-def get_committee_tenure_days(conn, member_id):
-    """Compute total committee tenure days from bio_data.committeesJson.
+def get_years_served(conn, member_id):
+    """Years served as a float — matches StatsRepository.getYearsServed.
 
-    Each committee membership has a startDate and optional endDate (null = ongoing).
-    Sums the days across all memberships to reward long-serving committee members.
+    Source order: mps.membershipStartDate (current unbroken tenure),
+    then bio_data.maidenSpeechDate, then DEFAULT_TENURE_START.
+    Returns at least 0.5 to avoid division-by-zero in rate calculations.
     """
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT committeesJson FROM bio_data WHERE mpId = ?",
+        "SELECT membershipStartDate FROM mps WHERE id = ?",
         (member_id,),
     )
     row = cursor.fetchone()
-    if not row or not row[0]:
-        return 0
-
+    start_str = row[0][:10] if row and row[0] else None
+    if not start_str:
+        cursor.execute(
+            "SELECT maidenSpeechDate FROM bio_data WHERE mpId = ?",
+            (member_id,),
+        )
+        row = cursor.fetchone()
+        start_str = row[0][:10] if row and row[0] else None
+    if not start_str:
+        start_str = DEFAULT_TENURE_START
     try:
-        committees = json.loads(row[0])
-        total_days = 0
-        today = datetime.date.today()
-        for comm in committees:
-            start_str = comm.get("startDate")
-            if not start_str:
-                continue
-            start = datetime.date.fromisoformat(start_str[:10])
-            end_str = comm.get("endDate")
-            if end_str:
-                end = datetime.date.fromisoformat(end_str[:10])
-            else:
-                end = today
-            if end > start:
-                total_days += (end - start).days
-        return total_days
+        start = datetime.date.fromisoformat(start_str)
+        days = (datetime.date.today() - start).days
+        return max(0.5, days / 365.25)
     except Exception:
-        return 0
+        return 1.0
 
 
 def create_precompute_tables(conn):
@@ -200,14 +214,15 @@ def compute_per_mp_metrics(conn):
     """Compute raw per-MP metrics via SQL aggregation.
 
     Returns a list of dicts with keys:
-      memberId, house, questionCount, speechCount, committeeCount,
-      voteParticipationRate, rebellionRate, rebellionCount, totalDivisionsVoted
+      memberId, house, isActive, questionCount, speechCount, committeeCount,
+      financeCount, voteParticipationRate, rebellionRate, rebellionCount,
+      totalDivisionsVoted, monthsSinceTenureStart
     """
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
-    # Get all MPs with their house
-    cursor.execute("SELECT id, house, partyName FROM mps")
+    # Get all MPs with their house and active flag
+    cursor.execute("SELECT id, house, partyName, isActive FROM mps")
     mps = cursor.fetchall()
     logger.info("Computing metrics for %d MPs", len(mps))
 
@@ -216,6 +231,7 @@ def compute_per_mp_metrics(conn):
         member_id = mp["id"]
         house = mp["house"]
         party_name = mp["partyName"]
+        is_active = mp["isActive"]
 
         # questionCount — read from hansard_contributions summary row
         # build_hansard.py stores one row per MP with debateSection='Summary'
@@ -241,6 +257,20 @@ def compute_per_mp_metrics(conn):
             (member_id,),
         )
         committee_count = cursor.fetchone()[0]
+
+        # financeCount — interests + expenses declared by this MP.
+        # NB: interests uses memberId, expenses uses mpId.
+        cursor.execute(
+            "SELECT COUNT(*) FROM interests WHERE memberId = ?",
+            (member_id,),
+        )
+        interest_count = cursor.fetchone()[0]
+        cursor.execute(
+            "SELECT COUNT(*) FROM expenses WHERE mpId = ?",
+            (member_id,),
+        )
+        expense_count = cursor.fetchone()[0]
+        finance_count = interest_count + expense_count
 
         # Tenure start date — only count divisions from this date onward so
         # new MPs (e.g. Hannah Spencer) are not penalized for divisions they
@@ -329,28 +359,85 @@ def compute_per_mp_metrics(conn):
         results.append({
             "memberId": member_id,
             "house": house,
+            "isActive": is_active,
             "questionCount": question_count,
             "speechCount": speech_count,
             "committeeCount": committee_count,
+            "financeCount": finance_count,
             "voteParticipationRate": participation_rate,
             "rebellionRate": rebellion_rate,
             "rebellionCount": rebellion_count,
             "totalDivisionsVoted": total_divisions_voted,
             "monthsSinceTenureStart": get_months_since_tenure_start(conn, member_id),
-            "committeeTenureDays": get_committee_tenure_days(conn, member_id),
+            "yearsServed": get_years_served(conn, member_id),
         })
 
     return results
 
 
+def compute_avg_years_served(conn, house):
+    """Average years served across active MPs in a house (matches MpDao.getAverageYearsServed)."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT AVG((julianday('now') - julianday(substr(membershipStartDate, 1, 10))) / 365.25)
+           FROM mps WHERE isActive = 1 AND house = ? AND membershipStartDate IS NOT NULL""",
+        (house,),
+    )
+    row = cursor.fetchone()[0]
+    return max(0.5, row if row is not None else 5.0)
+
+
+def compute_avg_finance_count(conn, house):
+    """Average (interests + expenses) count across active MPs in a house.
+
+    Matches InterestDao.getAverageInterestCount + ExpenseDao.getAverageExpenseCount:
+    AVG over per-MP COUNT(*) for active MPs only.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT AVG(cnt) FROM (
+               SELECT COUNT(*) as cnt FROM interests
+               WHERE memberId IN (SELECT id FROM mps WHERE isActive = 1 AND house = ?)
+               GROUP BY memberId
+           )""",
+        (house,),
+    )
+    avg_interests = cursor.fetchone()[0] or 0.0
+    cursor.execute(
+        """SELECT AVG(cnt) FROM (
+               SELECT COUNT(*) as cnt FROM expenses
+               WHERE mpId IN (SELECT id FROM mps WHERE isActive = 1 AND house = ?)
+               GROUP BY mpId
+           )""",
+        (house,),
+    )
+    avg_expenses = cursor.fetchone()[0] or 0.0
+    return avg_interests + avg_expenses
+
+
+def compute_finance_trait_score(finance_count, years_served, avg_finance_count, avg_years):
+    """Finance trait score 0-100, rate-vs-average (matches StatsRepository.computeFinanceTraitScore).
+
+    score = (mpFinanceCount / mpYears) / (avgFinanceCount / avgYears) * 100
+    An MP declaring at the peer-average rate scores 100.
+    """
+    mp_years = max(0.5, years_served)
+    avg_years = max(0.5, avg_years)
+    avg_f_rate = avg_finance_count / avg_years
+    if avg_f_rate <= 0:
+        return 0
+    score = (finance_count / mp_years) / avg_f_rate * 100.0
+    return max(0, min(100, int(score)))
+
+
 def compute_activity_score(participation_rate, question_count, speech_count,
-                           months_since_tenure, committee_tenure_days):
+                           months_since_tenure, finance_trait_score):
     """Compute activity score using the self-performance formula (matches ActivityScoreCalculator.kt).
     Returns a float 0.0-10.0.
 
-    Weights: votes 3.0, questions 2.5, speeches 2.5, committees 2.0.
-    Questions/speeches scored as per-month rates. Committees scored as tenure days.
-    No peer normalization — the score reflects the MP's own activity.
+    Weights: votes 3.0, questions 2.5, speeches 2.5, finance 2.0.
+    Questions/speeches scored as per-month rates. Finance is the
+    rate-vs-average trait score (0-100) scaled to the weight.
     """
     vote_contrib = min(participation_rate * VOTE_WEIGHT, VOTE_WEIGHT)
 
@@ -360,9 +447,9 @@ def compute_activity_score(participation_rate, question_count, speech_count,
     speeches_per_month = speech_count / max(1, months_since_tenure)
     speeches_contrib = _scale_rate(speeches_per_month, FULL_MARKS_SPEECHES_PER_MONTH, SPEECHES_WEIGHT)
 
-    committees_contrib = _scale_rate(float(committee_tenure_days), FULL_MARKS_COMMITTEE_DAYS, COMMITTEES_WEIGHT)
+    finance_contrib = min(finance_trait_score / 100.0 * FINANCE_WEIGHT, FINANCE_WEIGHT)
 
-    total = vote_contrib + questions_contrib + speeches_contrib + committees_contrib
+    total = vote_contrib + questions_contrib + speeches_contrib + finance_contrib
     return max(0.0, min(10.0, total))
 
 
@@ -389,14 +476,24 @@ def compute_percentile(value, peer_values):
 
 def populate_mp_stats(conn, mp_metrics):
     """Populate mp_stats table with per-MP metrics, activity scores, and percentiles."""
-    # Group by house for percentile computation
+    # Group by house for percentile + finance-average computation
     by_house = {}
     for m in mp_metrics:
         by_house.setdefault(m["house"], []).append(m)
 
+    # Per-house finance averages (rate-vs-average scoring needs peer rates)
+    house_finance = {}
+    for house in by_house:
+        house_finance[house] = (
+            compute_avg_finance_count(conn, house),
+            compute_avg_years_served(conn, house),
+        )
+
     # Compute percentiles and activity scores
     rows = []
     for house, mps in by_house.items():
+        avg_finance_count, avg_years = house_finance[house]
+
         # Collect peer value lists for percentile computation
         rebellion_values = [m["rebellionRate"] for m in mps]
         participation_values = [m["voteParticipationRate"] for m in mps]
@@ -405,12 +502,15 @@ def populate_mp_stats(conn, mp_metrics):
         committee_values = [float(m["committeeCount"]) for m in mps]
 
         for m in mps:
+            finance_trait = compute_finance_trait_score(
+                m["financeCount"], m["yearsServed"], avg_finance_count, avg_years,
+            )
             activity_score = compute_activity_score(
                 m["voteParticipationRate"],
                 m["questionCount"],
                 m["speechCount"],
                 m["monthsSinceTenureStart"],
-                m["committeeTenureDays"],
+                finance_trait,
             )
             rebellion_pct = compute_percentile(m["rebellionRate"], rebellion_values)
             participation_pct = compute_percentile(m["voteParticipationRate"], participation_values)
@@ -506,9 +606,16 @@ def main():
 
     # Delta skip: if changed_apis is provided and none of our dependencies changed,
     # the precomputed tables are unchanged — exit early.
-    # Dependencies: mps, commons_votes, lords_votes, committees, debates, hansard
+    # Dependencies (source tables actually read by this script):
+    #   mps (id/house/partyName/isActive/membershipStartDate),
+    #   commons_votes+lords_votes (divisions, division_votes),
+    #   committees (mp_committee_cross_ref), debates (debate_speeches),
+    #   hansard (hansard_contributions), interests+expenses (financeCount),
+    #   bio_data+historical_members (tenure start dates).
     PRECOMPUTE_DEPENDENCIES = {"mps", "commons_votes", "lords_votes",
-                                "committees", "debates", "hansard"}
+                                "committees", "debates", "hansard",
+                                "interests", "expenses", "bio_data",
+                                "historical_members"}
     if args.changed_apis is not None:
         changed = {a.strip() for a in args.changed_apis.split(",") if a.strip()}
         if not changed.intersection(PRECOMPUTE_DEPENDENCIES):

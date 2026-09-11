@@ -120,11 +120,48 @@ def fetch_wikipedia_extracts(titles: list[str]) -> dict[str, dict]:
     return result
 
 
-def build_wiki_bios(output_db: str, mps_db: str, goveye_db: str, inplace: bool = False):
+_MONTHS = {
+    "january": 1, "february": 2, "march": 3, "april": 4,
+    "may": 5, "june": 6, "july": 7, "august": 8,
+    "september": 9, "october": 10, "november": 11, "december": 12,
+}
+
+
+def _extract_dob(text: str) -> str | None:
+    """Extract a birth date from a Wikipedia intro extract.
+
+    Handles "born 27 September 1953" and "born September 27, 1953".
+    Returns YYYY-MM-DD or None. Rejects implausible years (MPs must be
+    adults, so born before ~2008 and after ~1930).
+    """
+    m = re.search(r"born(?:\s+on)?\s+(\d{1,2})\s+(\w+)\s+(\d{4})", text, re.IGNORECASE)
+    if not m:
+        m = re.search(r"born(?:\s+on)?\s+(\w+)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})", text, re.IGNORECASE)
+        if not m:
+            return None
+        month_name, day, year = m.group(1), m.group(2), m.group(3)
+    else:
+        day, month_name, year = m.group(1), m.group(2), m.group(3)
+    month = _MONTHS.get(month_name.lower())
+    if not month:
+        return None
+    year_i = int(year)
+    if year_i < 1930 or year_i > 2008:
+        return None
+    return f"{year_i:04d}-{month:02d}-{int(day):02d}"
+
+
+def build_wiki_bios(output_db: str, mps_db: str, goveye_db: str, inplace: bool = False,
+                    dob_only: bool = False):
     """Build the wiki_bios database from Wikipedia extracts.
 
     If inplace=True, merges the Wikipedia bios directly into goveye.db,
     updating mp_synopsis.synopsisText and mp_links.wikipediaUrl.
+
+    If dob_only=True, only fills bio_data.dateOfBirth for MPs that lack one
+    (used by update-bio-data.yml to enrich bio_data.db after build_mnis.py).
+    In that mode --goveye-db is the target DB (any DB containing a bio_data
+    table) and only MPs with NULL dateOfBirth are fetched.
     """
     # Read MP IDs and names from mps.db
     mps_conn = sqlite3.connect(mps_db)
@@ -138,14 +175,34 @@ def build_wiki_bios(output_db: str, mps_db: str, goveye_db: str, inplace: bool =
     # Read existing MNIS synopses from goveye.db (to keep them as fallback)
     goveye_conn = sqlite3.connect(goveye_db)
     goveye_conn.row_factory = sqlite3.Row
-    existing_synopses = {
-        row["mpId"]: row["synopsisText"]
-        for row in goveye_conn.execute("SELECT mpId, synopsisText FROM mp_synopsis").fetchall()
-    }
-    goveye_conn.close()
-    logger.info("Read %d existing synopses from %s", len(existing_synopses), goveye_db)
+    if dob_only:
+        existing_synopses = {}
+    else:
+        existing_synopses = {
+            row["mpId"]: row["synopsisText"]
+            for row in goveye_conn.execute("SELECT mpId, synopsisText FROM mp_synopsis").fetchall()
+        }
 
-    if inplace:
+    if dob_only:
+        # Only fetch Wikipedia for MPs still missing a DOB — MNIS-derived
+        # DOBs (2+ PreferredNames) always win and never get re-fetched.
+        missing_dob_ids = {
+            row["mpId"]
+            for row in goveye_conn.execute(
+                "SELECT mpId FROM bio_data WHERE dateOfBirth IS NULL OR dateOfBirth = ''"
+            ).fetchall()
+        }
+        mp_rows = [mp for mp in mp_rows if mp["id"] in missing_dob_ids]
+        logger.info("DOB-only mode: %d MPs still missing dateOfBirth", len(mp_rows))
+    goveye_conn.close()
+    if not dob_only:
+        logger.info("Read %d existing synopses from %s", len(existing_synopses), goveye_db)
+
+    if dob_only:
+        # Write DOBs directly into the target DB (bio_data.db or goveye.db).
+        out_conn = sqlite3.connect(goveye_db)
+        logger.info("DOB-only mode — writing to bio_data in %s", goveye_db)
+    elif inplace:
         # Write directly into goveye.db
         out_conn = sqlite3.connect(goveye_db)
         logger.info("Inplace mode — merging Wikipedia bios directly into %s", goveye_db)
@@ -196,7 +253,26 @@ def build_wiki_bios(output_db: str, mps_db: str, goveye_db: str, inplace: bool =
                 logger.debug("  Short extract for MP %d (%s): %d chars", mp_id, title, len(bio_text))
                 continue
 
-            if inplace:
+            # Skip Wikipedia disambiguation pages — these contain "may refer to"
+            # and list unrelated people/things instead of a real biography.
+            # This catches disambiguation pages that are longer than 100 chars
+            # (e.g. "Jack Abbott may refer to Jack Henry Abbott, American
+            # criminal; Jack Abbott, American college football coach; ...")
+            bio_lower = bio_text.lower()
+            if "may refer to" in bio_lower or "usually refers to" in bio_lower or "can refer to" in bio_lower:
+                skipped += 1
+                logger.debug("  Disambiguation page for MP %d (%s): %s", mp_id, title, bio_text[:80])
+                continue
+
+            if dob_only:
+                # Only fill DOB — don't touch synopsis/links.
+                dob = _extract_dob(bio_text)
+                if dob:
+                    out_conn.execute(
+                        "UPDATE bio_data SET dateOfBirth = ? WHERE mpId = ? AND (dateOfBirth IS NULL OR dateOfBirth = '')",
+                        (dob, mp_id),
+                    )
+            elif inplace:
                 # Update mp_synopsis with the richer Wikipedia extract
                 out_conn.execute(
                     "UPDATE mp_synopsis SET synopsisText = ? WHERE mpId = ?",
@@ -207,6 +283,15 @@ def build_wiki_bios(output_db: str, mps_db: str, goveye_db: str, inplace: bool =
                     "UPDATE mp_links SET wikipediaUrl = ? WHERE mpId = ?",
                     (result["url"], mp_id),
                 )
+                # Fill dateOfBirth where MNIS has none — the intro extract
+                # almost always contains "born 27 September 1953". Only fills
+                # NULLs so an MNIS-derived DOB (2+ PreferredNames) always wins.
+                dob = _extract_dob(bio_text)
+                if dob:
+                    out_conn.execute(
+                        "UPDATE bio_data SET dateOfBirth = ? WHERE mpId = ? AND (dateOfBirth IS NULL OR dateOfBirth = '')",
+                        (dob, mp_id),
+                    )
             else:
                 out_conn.execute(
                     "INSERT OR REPLACE INTO wiki_bios (mpId, bioText, wikipediaUrl, lastUpdated) VALUES (?, ?, ?, ?)",
@@ -225,13 +310,16 @@ def main():
     parser = argparse.ArgumentParser(
         description="Build Wikipedia biography extracts for UK MPs."
     )
-    parser.add_argument("--output", default="wiki_bios.db", help="Output SQLite DB path (ignored if --inplace)")
+    parser.add_argument("--output", default="wiki_bios.db", help="Output SQLite DB path (ignored if --inplace or --dob-only)")
     parser.add_argument("--mps-db", required=True, help="Path to mps.db")
-    parser.add_argument("--goveye-db", required=True, help="Path to goveye.db (for existing synopses, or target if --inplace)")
+    parser.add_argument("--goveye-db", required=True, help="Path to goveye.db (for existing synopses, or target if --inplace/--dob-only)")
     parser.add_argument("--inplace", action="store_true", help="Merge Wikipedia bios directly into goveye.db")
+    parser.add_argument("--dob-only", action="store_true",
+                        help="Only fill bio_data.dateOfBirth for MPs missing one (target: --goveye-db). Skips synopsis/links writes.")
     args = parser.parse_args()
 
-    build_wiki_bios(args.output, args.mps_db, args.goveye_db, inplace=args.inplace)
+    build_wiki_bios(args.output, args.mps_db, args.goveye_db, inplace=args.inplace,
+                    dob_only=args.dob_only)
 
 
 if __name__ == "__main__":

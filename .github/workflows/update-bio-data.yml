@@ -67,6 +67,15 @@ jobs:
         run: |
           python build_mnis.py --output bio_data.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_bio_data.db --mps-db mps.db
 
+      - name: Fill missing DOBs from Wikipedia
+        if: success()
+        run: |
+          # MNIS <DateOfBirth> is nil for most MPs; the PreferredName fallback
+          # in build_mnis.py only covers MPs with 2+ name records. Wikipedia
+          # intro extracts contain "born 27 September 1953" for most of the
+          # rest — fills NULLs only, never overwrites an MNIS-derived DOB.
+          python build_wikipedia_bios.py --dob-only --mps-db mps.db --goveye-db bio_data.db
+
       - name: Save seed checkpoint
         if: steps.download_prev.outputs.has_previous != 'true' && always()
         uses: actions/cache@v4
