@@ -121,6 +121,30 @@ def diff_table(new_conn, prev_conn, table_name, pk_columns, full_upsert=False):
     """
     new_rows = get_table_rows(new_conn, table_name)
 
+    # Sanity check: every declared PK column must exist in the table.
+    # If a table is missing from TABLE_PRIMARY_KEYS it falls back to ["id"],
+    # and a table without an "id" column collapses every row to the same
+    # (None,) key — silently producing a patch with a single upsert.
+    if new_rows:
+        missing_pk = [c for c in pk_columns if c not in new_rows[0]]
+        if missing_pk:
+            raise ValueError(
+                f"Table '{table_name}': declared PK columns {missing_pk} "
+                f"not found in table (columns: {list(new_rows[0].keys())}). "
+                f"Add the correct PK to TABLE_PRIMARY_KEYS."
+            )
+        # Also catch PKs that are NULL in every row — same collapse symptom.
+        null_keys = sum(
+            1 for row in new_rows
+            if all(row.get(c) is None for c in pk_columns)
+        )
+        if null_keys == len(new_rows):
+            raise ValueError(
+                f"Table '{table_name}': all {len(new_rows)} rows have NULL "
+                f"PK columns {pk_columns} — the diff would collapse to a "
+                f"single upsert. Check TABLE_PRIMARY_KEYS."
+            )
+
     # Full upsert mode: all rows are upserts, no deletes
     if full_upsert:
         return {"upsert": new_rows, "delete": []}

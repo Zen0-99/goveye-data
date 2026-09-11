@@ -44,6 +44,10 @@ TRACKED_SCRIPTS = [
     "merge_dbs.py",
     "extract_tags.py",
     "restore_tags.py",
+    "schema.py",
+    "diff_db.py",
+    "validate_schema.py",
+    "sync_schema.py",
 ]
 
 

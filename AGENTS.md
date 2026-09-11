@@ -88,6 +88,29 @@ All `build_*.py` scripts support two modes:
 
 **Delta mode does NOT skip API calls.** It re-fetches all data and upserts. The only scripts with true API-skip logic are `build_precompute.py` and `build_tags.py` (via `--changed-apis` flag).
 
+## Enrichment data must have an owning stream
+
+Any data that lives in `goveye.db` must be produced by a `build_*.py` script
+that owns a per-API DB — otherwise it can't reach devices via patches and
+will be silently lost on the next seed rebuild.
+
+- **Good**: Wikipedia DOBs live in `bio_data.db` via `build_mnis.py` +
+  `build_wikipedia_bios.py --dob-only` in `update-bio-data.yml`. Future
+  bio-data patches carry them.
+- **Bad**: writing enrichment only into the merged `goveye.db` during
+  build-seed — the data never lands in a per-API DB, so no patch carries it
+  and devices that update incrementally never see it.
+
+When adding a new data layer (new table, new enrichment):
+1. Give it a `build_*.py` that writes a per-API DB (or enriches an existing one).
+2. Give it an `update-*.yml` workflow that produces a diff patch.
+3. Add the table's real PK to `diff_db.py` `TABLE_PRIMARY_KEYS` — missing
+   entries silently collapse the patch to one upsert.
+4. Add the table to `merge_dbs.py` `PER_API_TABLES`.
+5. Verify `validate_schema.py` passes — it now checks full Room TableInfo
+   parity (columns, affinities, PKs, indices, FKs, FTS triggers), which is
+   exactly what Room validates on device after migrations.
+
 ## Schema sync
 
 **Automated:** `sync_schema.py` fetches the latest Room schema JSON from the GovEye
@@ -96,11 +119,19 @@ The committed `bundled_schema.json` is a fallback (used if the fetch fails) and
 for local dev. Run `python sync_schema.py` manually after pulling GovEye changes
 that modify Room entities.
 
+**Drift gate:** `sync_schema.py` also fetches `BundledDatabase.kt` and compares
+its `version = N` against the latest schema JSON version. If the app's DB
+version is ahead (schema export not pushed), the workflow fails — a seed built
+at a stale schema opens via Room migrations on device, and any migration gap
+crashes the app. If you hit this: export the Room schema in GovEye
+(`N.json`), push, and re-run.
+
 When Room entities change in the GovEye app:
 1. Export the new schema JSON from Room (`exportSchema=true`) → `core/data/schemas/com.goveye.app.data.local.BundledDatabase/N.json`
-2. Push GovEye — goveye-data CI will auto-sync the schema on the next workflow run
-3. Update build scripts if new entities need data fetching
-4. Bump `version` in `BundledDatabase.kt` and add a migration in `DatabaseModule.kt`
+2. Bump `version` in `BundledDatabase.kt` and add a migration in `DatabaseModule.kt`
+3. Push GovEye — goveye-data CI will auto-sync the schema on the next workflow run
+   (the drift gate fails the build if the schema JSON wasn't pushed)
+4. Update build scripts if new entities need data fetching
 5. Trigger a seed build
 
 ## Running tests

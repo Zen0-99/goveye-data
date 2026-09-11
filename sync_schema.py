@@ -17,6 +17,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 import urllib.request
 import urllib.error
@@ -80,6 +81,47 @@ def download_schema(repo: str, version: int, branch: str = "master") -> str | No
         return None
 
 
+def fetch_app_db_version(repo: str, branch: str = "master") -> int | None:
+    """Fetch BundledDatabase.kt from GovEye and extract `version = N`.
+
+    Returns the Room database version declared in the app, or None if the
+    fetch/parse fails.
+    """
+    path = "core/data/src/main/java/com/goveye/app/data/local/BundledDatabase.kt"
+    for b in (branch, "main"):
+        url = GITHUB_RAW_URL.format(repo=repo, branch=b, path=path)
+        req = urllib.request.Request(url, headers={"User-Agent": "goveye-data-sync"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                content = resp.read().decode("utf-8")
+        except urllib.error.URLError:
+            continue
+        m = re.search(r"version\s*=\s*(\d+)", content)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _check_drift(repo: str, branch: str, schema_version: int) -> None:
+    """Fail the build if the app's BundledDatabase.version is ahead of the
+    schema JSON version we're about to build with.
+
+    A seed built at a stale schema version opens on device via Room
+    migrations; any gap in the migration chain (missing index, missing
+    column) crashes the app. Better to fail the workflow than ship it.
+    """
+    app_version = fetch_app_db_version(repo, branch)
+    if app_version is not None and app_version != schema_version:
+        logger.error(
+            "Schema drift: app BundledDatabase.kt is at version %d but the "
+            "latest schema JSON in %s is v%d. A seed built now would open "
+            "with a migration gap on device. Export + push the Room schema "
+            "(%d.json) to GovEye before building the seed.",
+            app_version, repo, schema_version, app_version,
+        )
+        sys.exit(1)
+
+
 def sync_schema(schema_dir: str, repo: str, branch: str = "master") -> bool:
     """Sync the latest schema from GovEye to schemas/bundled_schema.json.
 
@@ -97,6 +139,10 @@ def sync_schema(schema_dir: str, repo: str, branch: str = "master") -> bool:
         )
         if os.path.exists(dest_path):
             logger.info("Using committed schema as fallback")
+            # Drift gate still applies to the committed schema
+            committed = load_committed_version(dest_path)
+            if committed is not None:
+                _check_drift(repo, branch, committed)
             return False
         else:
             logger.error("No committed schema fallback exists — aborting")
@@ -118,12 +164,18 @@ def sync_schema(schema_dir: str, repo: str, branch: str = "master") -> bool:
         )
         if os.path.exists(dest_path):
             logger.info("Using committed schema as fallback")
+            committed = load_committed_version(dest_path)
+            if committed is not None:
+                _check_drift(repo, branch, committed)
             return False
         else:
             logger.error("No committed schema fallback exists — aborting")
             sys.exit(1)
 
-    # 3. Check if the committed version is already current
+    # 3. Drift gate — applies whether or not the schema file changed
+    _check_drift(repo, branch, latest_version)
+
+    # 4. Check if the committed version is already current
     new_data = json.loads(schema_json)
     if os.path.exists(dest_path):
         with open(dest_path, "r", encoding="utf-8") as f:
@@ -132,12 +184,22 @@ def sync_schema(schema_dir: str, repo: str, branch: str = "master") -> bool:
             logger.info("Schema already current (v%d) — no update needed", latest_version)
             return True
 
-    # 4. Write the new schema
+    # 5. Write the new schema
     os.makedirs(schema_dir, exist_ok=True)
     with open(dest_path, "w", encoding="utf-8") as f:
         f.write(schema_json)
     logger.info("Synced schema v%d → %s", latest_version, dest_path)
+
     return True
+
+
+def load_committed_version(schema_path: str) -> int | None:
+    """Read the committed bundled_schema.json's database version."""
+    try:
+        with open(schema_path, "r", encoding="utf-8") as f:
+            return json.load(f)["database"]["version"]
+    except (OSError, json.JSONDecodeError, KeyError):
+        return None
 
 
 def main():
