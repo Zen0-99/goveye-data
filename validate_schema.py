@@ -95,6 +95,24 @@ def validate(db_path, schema_path):
                     f"Expected columns: {[f['columnName'] for f in entity.get('fields', [])]}"
                 )
 
+    # 4. Check all expected indices exist. Room validates indices in
+    # TableInfo after migration — a seed missing a declared index crashes
+    # the app on open ("Migration didn't properly handle").
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'"
+    )
+    actual_indices = {row[0] for row in cursor.fetchall()}
+    for entity in schema_module.get_entities(schema):
+        for idx in entity.get("indices", []):
+            idx_name = idx["name"]
+            if idx_name not in actual_indices:
+                raise ValueError(
+                    f"Missing index '{idx_name}' on table "
+                    f"'{entity['tableName']}'. The schema declares it but "
+                    f"the built DB does not have it — Room validation "
+                    f"will fail on device."
+                )
+
     conn.close()
     return True
 

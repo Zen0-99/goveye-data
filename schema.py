@@ -76,6 +76,24 @@ def get_fts_triggers(schema):
     return triggers
 
 
+def get_index_sql(schema):
+    """Return a list of (table_name, index_create_sql) tuples for all
+    entity indices declared in the schema.
+
+    Room validates indices in TableInfo after migrations — a seed DB
+    missing a declared index crashes the app on open ("Migration didn't
+    properly handle"). The index createSql uses the same ${TABLE_NAME}
+    placeholder as the table createSql.
+    """
+    result = []
+    for entity in get_entities(schema):
+        table_name = entity["tableName"]
+        for idx in entity.get("indices", []):
+            create_sql = idx["createSql"].replace("${TABLE_NAME}", table_name)
+            result.append((table_name, create_sql))
+    return result
+
+
 def get_setup_queries(schema):
     """Return the room_master_table setup queries from database.setupQueries.
 
@@ -219,6 +237,13 @@ def create_database_with_tables(output_path, schema_path, table_names):
         if any(name in trigger_sql for name in table_names_set):
             cursor.execute(trigger_sql)
 
+    # 2.5. Create entity indices for the specified tables. Room validates
+    # index presence in TableInfo after migration — a seed missing a
+    # declared index crashes on open.
+    for table_name, index_sql in get_index_sql(schema):
+        if table_name in table_names_set:
+            cursor.execute(index_sql)
+
     # 3. Execute setupQueries to create room_master_table with the FULL
     # schema's identity hash. Even per-API DBs get the full identity hash
     # so merge_dbs.py can produce a goveye.db that Room accepts.
@@ -326,7 +351,12 @@ def ensure_schema(conn, schema_path, table_names):
                     except sqlite3.OperationalError:
                         pass
 
-    # 3. Update room_master_table with current identity hash
+    # 3. Create missing entity indices (IF NOT EXISTS makes this idempotent)
+    for table_name, index_sql in get_index_sql(schema):
+        if table_name in table_names_set:
+            cursor.execute(index_sql)
+
+    # 4. Update room_master_table with current identity hash
     cursor.execute(
         "INSERT OR REPLACE INTO room_master_table (id, identity_hash) VALUES (42, ?)",
         (identity_hash,),
