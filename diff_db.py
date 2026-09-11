@@ -47,6 +47,11 @@ TABLE_PRIMARY_KEYS = {
     "mp_synopsis": ["mpId"],
     "mp_contacts": ["mpId", "typeId"],
     "mp_experience": ["id"],
+    "bio_data": ["mpId"],
+    "mp_links": ["mpId"],
+    "party_manifestos": ["partyId"],
+    "party_stats": ["partyId"],
+    "historical_members": ["twfyPersonId"],
 }
 
 # Tables to skip in diffing (FTS virtual tables don't need diffing)
