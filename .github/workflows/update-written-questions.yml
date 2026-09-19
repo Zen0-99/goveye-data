@@ -428,7 +428,7 @@ jobs:
     needs: [prepare, seed-batch-1, seed-batch-2, seed-batch-3, seed-batch-4, seed-batch-5, seed-batch-6]
     if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 120  # delta mode bounds full-text fetches (--max-full-text); bulk phase is now date-filtered
     steps:
       - uses: actions/checkout@v4
 
@@ -460,7 +460,7 @@ jobs:
       - name: Build Written Questions database (delta mode)
         if: needs.prepare.outputs.mode == 'delta'
         run: |
-          python build_written_questions.py --output written_questions.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_written_questions.db --mps-db mps.db --max-full-text 40000
+          python build_written_questions.py --output written_questions.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_written_questions.db --mps-db mps.db --max-full-text 25000
 
       # --- Seed mode: download the latest checkpoint from the chain ---
 

@@ -34,6 +34,7 @@ import shutil
 import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta
 
 import requests
 
@@ -141,6 +142,43 @@ def fetch_questions_for_mp(mp_id):
             break
         skip += API_BATCH_SIZE
     return questions
+
+
+def fetch_questions_since(since_date, mp_ids):
+    """Delta fetch: only questions tabled OR answered since `since_date`.
+
+    The full corpus is ~400k rows and per-MP pagination takes ~25 minutes.
+    A weekly delta only needs recent activity: tabledWhenFrom catches new
+    questions, answeredWhenFrom catches late answers to older questions
+    (answers can arrive weeks after tabling). Both are shallow queries —
+    no deep-pagination 500s. Results are deduped by id and filtered to
+    known Commons MPs.
+    """
+    queries = {"tabledWhenFrom": since_date, "answeredWhenFrom": since_date}
+    seen = {}
+    for param, value in queries.items():
+        skip = 0
+        while True:
+            params = {"skip": skip, "take": API_BATCH_SIZE, param: value}
+            try:
+                r = api_get(QUESTIONS_API, params=params, timeout=60)
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code >= 500:
+                    logger.error("Skipping %s page at skip=%d (persistent 5xx)", param, skip)
+                    break
+                raise
+            results = r.json().get("results", [])
+            if not results:
+                break
+            for item in results:
+                q = _parse_question(item.get("value", {}))
+                if q.get("askingMemberId") in mp_ids:
+                    seen[q["id"]] = q
+            if len(results) < API_BATCH_SIZE:
+                break
+            skip += API_BATCH_SIZE
+        logger.info("%s=%s: %d questions kept so far", param, value, len(seen))
+    return list(seen.values())
 
 
 def fetch_written_questions(mp_ids=None):
@@ -515,12 +553,12 @@ def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None,
     mp_ids = fetch_all_mps_from_db(mps_db)
     logger.info("Loaded %d MP IDs from %s for filtering", len(mp_ids), mps_db)
 
-    # Fetch questions per-MP (avoids deep-pagination 500 errors)
-    questions = fetch_written_questions(mp_ids=mp_ids)
-
-    # Questions are already filtered to known MPs by the API
-    filtered = questions
-    logger.info("Fetched %d questions from known MPs", len(filtered))
+    # Delta only needs recent activity — a full per-MP sweep of ~400k rows
+    # takes ~25 min and blows the workflow timeout before full-text fetching
+    # even starts. 30-day lookback covers new questions + late answers.
+    since = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    filtered = fetch_questions_since(since, mp_ids)
+    logger.info("Fetched %d questions tabled/answered since %s", len(filtered), since)
 
     if mp_limit:
         filtered = filtered[:mp_limit]

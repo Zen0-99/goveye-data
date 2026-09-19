@@ -76,39 +76,63 @@ def fetch_member_counts(member_id, timeout=30, max_retries=3):
                 return None
 
 
+# If the Hansard API is broadly failing (down or rate-limiting the runner),
+# every call burns a 30s timeout × 3 retries — 650 MPs can't finish inside
+# the workflow timeout even in parallel. After this many completed fetches,
+# a failure rate above the threshold aborts the sweep early; unfetched MPs
+# keep their stored counts and the run still publishes.
+CB_MIN_ATTEMPTS = 80
+CB_MAX_FAILURE_RATE = 0.7
+
+
 def fetch_all_counts(mps, skip_ids=None):
     """Fetch contribution counts for MPs in parallel.
 
-    The Hansard API takes 60s+ on bad days — serial fetching with a 60s
-    timeout and 3 retries blew the 60-minute workflow timeout four weeks
-    running. 8 workers keep wall-clock bounded (~650 calls in minutes).
+    The Hansard API takes several seconds per call — serial fetching with
+    retries blew the 60-minute workflow timeout four weeks running.
+    4 workers keep wall-clock bounded without hammering the API
+    (8 workers appeared to trigger throttling — every call timed out).
 
     Returns (counts, failed) where counts is a list of
     (member_id, member_name, total_written_answers, total_contributions)
-    and failed is the number of MPs skipped after retry exhaustion.
+    and failed is the number of MPs skipped after retry exhaustion or an
+    early circuit-breaker abort.
     """
     skip_ids = skip_ids or set()
     todo = [(mid, name) for mid, name in mps if mid not in skip_ids]
     counts = []
     failed = 0
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    attempted = 0
+    aborted = False
+    with ThreadPoolExecutor(max_workers=4) as executor:
         future_to_mp = {
             executor.submit(fetch_member_counts, mid): (mid, name)
             for mid, name in todo
         }
-        for i, future in enumerate(as_completed(future_to_mp), 1):
+        for future in as_completed(future_to_mp):
             mid, name = future_to_mp[future]
+            attempted += 1
             res = future.result()
             if res is None:
                 failed += 1
-                continue
-            total_contributions, total_written_answers = res
-            counts.append((mid, name, total_written_answers, total_contributions))
-            if i % 50 == 0:
-                logger.info("Fetched %d/%d MPs", i, len(todo))
+            else:
+                total_contributions, total_written_answers = res
+                counts.append((mid, name, total_written_answers, total_contributions))
+            if attempted % 50 == 0:
+                logger.info("Fetched %d/%d MPs (%d failed)", attempted, len(todo), failed)
+            if (not aborted and attempted >= CB_MIN_ATTEMPTS
+                    and failed / attempted > CB_MAX_FAILURE_RATE):
+                aborted = True
+                logger.error(
+                    "Hansard API broadly failing (%d/%d attempts failed) — "
+                    "aborting sweep; remaining MPs keep stored counts",
+                    failed, attempted)
+                for f in future_to_mp:
+                    f.cancel()
+                break
     if failed:
         logger.warning("Skipped %d MPs after fetch failures — keeping stored counts", failed)
-    return counts, failed
+    return counts, failed + (len(todo) - attempted if aborted else 0)
 
 
 def fetch_all_mps_from_db(mps_db_path):
