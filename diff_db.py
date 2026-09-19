@@ -22,26 +22,27 @@ from datetime import datetime, timezone
 
 import schema as schema_module
 
-# Primary key definitions for each table.
-# Maps table name to list of primary key column names.
-# For tables with auto-generated primary keys or no meaningful PK for diffing,
-# we use all columns as the comparison key.
+# Fallback primary key definitions, used only when the schema JSON declares
+# no primary key for a table (Room entities always declare one, so this is
+# defensive). The schema is the source of truth — entries here were
+# historically hand-maintained and drifted (e.g. bill_stages was ["id"]
+# instead of ["billId", "stageId"], collapsing patches to a single upsert).
 TABLE_PRIMARY_KEYS = {
+    "remote_keys": ["label"],
+    "bill_follows": ["id"],
+    "follows": ["id"],
+    "mp_notification_prefs": ["mpId"],
     "mps": ["id"],
     "divisions": ["id"],
     "division_votes": ["divisionId", "memberId"],
-    "remote_keys": ["label"],
     "committees": ["id"],
     "mp_committee_cross_ref": ["memberId", "committeeId"],
     "bills": ["id"],
-    "bill_stages": ["id"],
-    "bill_follows": ["id"],
-    "hansard_contributions": ["id"],
+    "bill_stages": ["billId", "stageId"],
+    "hansard_contributions": ["itemId"],
     "interests": ["id"],
-    "follows": ["id"],
     "recess_dates": ["id"],
-    "recess_dates_meta": ["id"],
-    "mp_notification_prefs": ["mpId"],
+    "recess_dates_meta": ["house"],
     "debate_speeches": ["debateGid", "speechGid"],
     "mp_career_events": ["id"],
     "mp_synopsis": ["mpId"],
@@ -53,9 +54,6 @@ TABLE_PRIMARY_KEYS = {
     "party_stats": ["partyId"],
     "historical_members": ["twfyPersonId"],
 }
-
-# Tables to skip in diffing (FTS virtual tables don't need diffing)
-SKIP_TABLES = {"mps_fts"}
 
 
 def get_table_columns(conn, table_name):
@@ -121,17 +119,18 @@ def diff_table(new_conn, prev_conn, table_name, pk_columns, full_upsert=False):
     """
     new_rows = get_table_rows(new_conn, table_name)
 
-    # Sanity check: every declared PK column must exist in the table.
-    # If a table is missing from TABLE_PRIMARY_KEYS it falls back to ["id"],
-    # and a table without an "id" column collapses every row to the same
-    # (None,) key — silently producing a patch with a single upsert.
+    # Sanity check: every PK column must exist in the table. PKs come from
+    # the Room schema JSON (fallback: TABLE_PRIMARY_KEYS); a wrong/missing
+    # entry collapses every row to the same (None,) key — silently
+    # producing a patch with a single upsert.
     if new_rows:
         missing_pk = [c for c in pk_columns if c not in new_rows[0]]
         if missing_pk:
             raise ValueError(
-                f"Table '{table_name}': declared PK columns {missing_pk} "
+                f"Table '{table_name}': PK columns {missing_pk} "
                 f"not found in table (columns: {list(new_rows[0].keys())}). "
-                f"Add the correct PK to TABLE_PRIMARY_KEYS."
+                f"The table doesn't match the Room schema — check for "
+                f"schema drift or a stale previous DB."
             )
         # Also catch PKs that are NULL in every row — same collapse symptom.
         null_keys = sum(
@@ -142,7 +141,7 @@ def diff_table(new_conn, prev_conn, table_name, pk_columns, full_upsert=False):
             raise ValueError(
                 f"Table '{table_name}': all {len(new_rows)} rows have NULL "
                 f"PK columns {pk_columns} — the diff would collapse to a "
-                f"single upsert. Check TABLE_PRIMARY_KEYS."
+                f"single upsert. Check the table's data."
             )
 
     # Full upsert mode: all rows are upserts, no deletes
@@ -194,8 +193,8 @@ def generate_diff(new_db_path, previous_db_path, schema_path, output_path,
         schema_path: Path to the Room schema JSON.
         output_path: Path to write the patch JSON file.
         tables: Optional list of table names to diff (D-10). If provided,
-            only those tables are diffed instead of all 16. The SKIP_TABLES
-            set still applies (mps_fts is always skipped — auto-synced).
+            only those tables are diffed instead of all 16. FTS virtual
+            tables are always skipped — they auto-sync via triggers.
         full_upsert_tables: Optional set of table names to force full upsert
             (all rows as upserts, no deletes). Used for one-time backfill
             patches.
@@ -209,6 +208,13 @@ def generate_diff(new_db_path, previous_db_path, schema_path, output_path,
         requested = {t.strip() for t in tables if t.strip()}
         table_names = table_names & requested
 
+    # FTS virtual tables auto-populate via content-sync triggers — diffing
+    # them produces useless patches keyed on implicit rowids.
+    skip_tables = {
+        e["tableName"] for e in schema_module.get_entities(schema)
+        if "USING FTS" in e.get("createSql", "").upper()
+    }
+
     new_conn = sqlite3.connect(new_db_path)
     new_conn.row_factory = sqlite3.Row  # Enable row access by column name
 
@@ -220,10 +226,14 @@ def generate_diff(new_db_path, previous_db_path, schema_path, output_path,
     changes = {}
     full_upsert_set = full_upsert_tables or set()
     for table_name in sorted(table_names):
-        if table_name in SKIP_TABLES:
+        if table_name in skip_tables:
             continue
 
-        pk_columns = TABLE_PRIMARY_KEYS.get(table_name, ["id"])
+        # The Room schema is the source of truth for primary keys;
+        # TABLE_PRIMARY_KEYS is a fallback for tables with no declared PK.
+        pk_columns = schema_module.get_primary_keys(schema, table_name)
+        if not pk_columns:
+            pk_columns = TABLE_PRIMARY_KEYS.get(table_name, ["id"])
         is_full = table_name in full_upsert_set
         result = diff_table(new_conn, prev_conn, table_name, pk_columns,
                             full_upsert=is_full)

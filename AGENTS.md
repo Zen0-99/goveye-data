@@ -104,8 +104,10 @@ will be silently lost on the next seed rebuild.
 When adding a new data layer (new table, new enrichment):
 1. Give it a `build_*.py` that writes a per-API DB (or enriches an existing one).
 2. Give it an `update-*.yml` workflow that produces a diff patch.
-3. Add the table's real PK to `diff_db.py` `TABLE_PRIMARY_KEYS` — missing
-   entries silently collapse the patch to one upsert.
+3. Ensure the Room entity declares a real `@PrimaryKey` — `diff_db.py`
+   derives diff keys from the schema JSON automatically. (`TABLE_PRIMARY_KEYS`
+   is only a fallback for entities with no declared PK; a wrong/missing PK
+   collapses the patch to one upsert and the sanity check fails the build.)
 4. Add the table to `merge_dbs.py` `PER_API_TABLES`.
 5. Verify `validate_schema.py` passes — it now checks full Room TableInfo
    parity (columns, affinities, PKs, indices, FKs, FTS triggers), which is
