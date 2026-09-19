@@ -30,7 +30,7 @@ import os
 import shutil
 import sqlite3
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
@@ -46,6 +46,24 @@ TABLE_NAMES = ["government_publications"]
 
 # Temp table for build-time body text (D-03 — not shipped, dropped before publishing)
 BODIES_TABLE = "_publication_bodies"
+
+
+def _parse_ts(value):
+    """Parse a GOV.UK timestamp to a comparable UTC instant.
+
+    The Search API emits '...Z' while stored publicUpdatedAt values came
+    from the Content API's '...+01:00' style — string equality would never
+    match, so normalize both to aware datetimes. Returns None on failure.
+    """
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError:
+        return None
 
 
 # --- GOV.UK Organisations API: department enumeration ---
@@ -479,7 +497,7 @@ def build_delta(output_path, previous_db, schema_path, days=90):
     #      without this, delta re-fetches ~90 days × all departments and
     #      exceeds the 58-minute workflow timeout.
     cursor.execute("SELECT id, url, publicUpdatedAt FROM government_publications")
-    existing = {url: (pid, upd) for pid, url, upd in cursor.fetchall() if url}
+    existing = {url: (pid, _parse_ts(upd)) for pid, url, upd in cursor.fetchall() if url}
 
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
@@ -502,7 +520,7 @@ def build_delta(output_path, previous_db, schema_path, days=90):
             seen_urls.add(url)
 
             prev = existing.get(url)
-            if prev and prev[1] and prev[1] == item.get("public_timestamp", ""):
+            if prev and prev[1] is not None and prev[1] == _parse_ts(item.get("public_timestamp", "")):
                 skipped_unchanged += 1
                 continue
 
