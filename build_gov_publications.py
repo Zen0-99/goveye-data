@@ -469,12 +469,26 @@ def build_delta(output_path, previous_db, schema_path, days=90):
     row = cursor.fetchone()
     next_id = (row[0] or 0) + 1 if row else 1
 
+    # Existing publications keyed by URL → (id, publicUpdatedAt).
+    # Two purposes:
+    #   1. Keep IDs stable across delta runs — without this, every pub gets
+    #      a fresh next_id each run and the diff becomes delete-all +
+    #      insert-all instead of a real delta.
+    #   2. Skip the per-publication Content API fetch when the search
+    #      result's public_timestamp matches the stored publicUpdatedAt —
+    #      without this, delta re-fetches ~90 days × all departments and
+    #      exceeds the 58-minute workflow timeout.
+    cursor.execute("SELECT id, url, publicUpdatedAt FROM government_publications")
+    existing = {url: (pid, upd) for pid, url, upd in cursor.fetchall() if url}
+
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
     org_slugs = fetch_organisation_slugs()
     all_publications = []
     all_bodies = {}
+    seen_urls = set()
+    skipped_unchanged = 0
 
     for org_slug in org_slugs:
         search_results = fetch_publications_for_org(org_slug, start_date, end_date)
@@ -482,6 +496,19 @@ def build_delta(output_path, previous_db, schema_path, days=90):
             path = item.get("link", "")
             if not path:
                 continue
+            url = f"https://www.gov.uk{path}"
+            if url in seen_urls:
+                continue  # publication linked to multiple departments
+            seen_urls.add(url)
+
+            prev = existing.get(url)
+            if prev and prev[1] and prev[1] == item.get("public_timestamp", ""):
+                skipped_unchanged += 1
+                continue
+
+            pub_id = prev[0] if prev else next_id
+            if not prev:
+                next_id += 1
             try:
                 content_details = fetch_publication_details(path)
             except Exception as e:
@@ -494,12 +521,16 @@ def build_delta(output_path, previous_db, schema_path, days=90):
             raw_body = details.get("body", "")
             stripped_body = strip_html_for_tag_matching(raw_body)
 
-            entity = map_publication_to_entity(item, content_details, timestamp_millis, next_id, stripped_body)
+            entity = map_publication_to_entity(item, content_details, timestamp_millis, pub_id, stripped_body)
             all_publications.append(entity)
             if stripped_body:
-                all_bodies[next_id] = stripped_body
-            next_id += 1
+                all_bodies[pub_id] = stripped_body
             time.sleep(API_DELAY)
+
+    logger.info(
+        "Delta fetch: %d new/updated, %d unchanged (skipped Content API)",
+        len(all_publications), skipped_unchanged,
+    )
 
     if all_publications:
         insert_publications(conn, all_publications, all_bodies, timestamp_millis)
