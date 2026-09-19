@@ -272,16 +272,50 @@ def map_question_to_entity(q, timestamp_millis):
 def insert_questions(conn, questions, timestamp_millis):
     """Insert questions into the written_questions table using batch executemany.
 
-    Uses INSERT OR REPLACE so this works for both seed and delta modes.
+    UPSERT with a preserve guard: the bulk API returns text stubs
+    (questionText truncated at 255 chars, answerText at 258). When the
+    incoming value looks like a stub and the stored text is longer
+    (previously-fetched full text), the stored text wins — otherwise every
+    delta run would clobber full text with stubs and re-fetch the entire
+    corpus.
     """
     cursor = conn.cursor()
     insert_sql = """
-        INSERT OR REPLACE INTO written_questions (
+        INSERT INTO written_questions (
             id, memberId, uin, dateTabled, answeringBodyId,
             answeringBodyName, questionText, house, lastUpdated,
             heading, dateForAnswer, dateAnswered, answerText,
             answeringMemberId, isWithdrawn, answerIsHolding, answerIsCorrection
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            memberId = excluded.memberId,
+            uin = excluded.uin,
+            dateTabled = excluded.dateTabled,
+            answeringBodyId = excluded.answeringBodyId,
+            answeringBodyName = excluded.answeringBodyName,
+            house = excluded.house,
+            lastUpdated = excluded.lastUpdated,
+            heading = excluded.heading,
+            dateForAnswer = excluded.dateForAnswer,
+            dateAnswered = excluded.dateAnswered,
+            answeringMemberId = excluded.answeringMemberId,
+            isWithdrawn = excluded.isWithdrawn,
+            answerIsHolding = excluded.answerIsHolding,
+            answerIsCorrection = excluded.answerIsCorrection,
+            questionText = CASE
+                WHEN length(excluded.questionText) >= 255
+                     AND length(written_questions.questionText) > length(excluded.questionText)
+                     AND substr(written_questions.questionText, 1, 255) = substr(excluded.questionText, 1, 255)
+                THEN written_questions.questionText
+                ELSE excluded.questionText
+            END,
+            answerText = CASE
+                WHEN length(excluded.answerText) >= 258
+                     AND length(written_questions.answerText) > length(excluded.answerText)
+                     AND substr(written_questions.answerText, 1, 258) = substr(excluded.answerText, 1, 258)
+                THEN written_questions.answerText
+                ELSE excluded.answerText
+            END
     """
 
     rows = [map_question_to_entity(q, timestamp_millis) for q in questions]
@@ -380,11 +414,15 @@ def _fetch_full_text_batch(conn, max_full_text=None):
     truncated text (len >= 255) and fetches full text for them.
     """
     # Find truncated questions from the DB (works for both fresh insert and
-    # checkpoint resume)
+    # checkpoint resume). The bulk API truncates questionText at exactly 255
+    # chars and answerText at exactly 258 (verified against the published
+    # DB: 107,704 rows at 255, 292,537 at 258, nothing in between). Using
+    # >= 255 would also match already-fetched full text — every batch would
+    # re-fetch completed rows and never converge.
     cursor = conn.cursor()
     cursor.execute(
         "SELECT id FROM written_questions "
-        "WHERE length(questionText) >= 255 OR length(answerText) >= 255 "
+        "WHERE length(questionText) = 255 OR length(answerText) = 258 "
         "ORDER BY id"
     )
     truncated_ids = [row[0] for row in cursor.fetchall()]
@@ -440,7 +478,8 @@ def _fetch_full_text_batch(conn, max_full_text=None):
     return False
 
 
-def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None):
+def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None,
+                max_full_text=None):
     """Delta mode: copy previous DB, re-fetch all questions, filter, upsert."""
     timestamp_millis = int(time.time() * 1000)
 
@@ -494,25 +533,40 @@ def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None):
     # Pitfall 4: fetch full text for truncated questions/answers (parallelised)
     # and update the DB incrementally as each full text arrives.
     #
-    # In delta mode, only fetch full text for questions that are NEW or whose
-    # text is still truncated in the DB. Questions already in the DB with full
-    # text (len < 255) are skipped to avoid re-fetching the entire corpus
-    # every run (which causes 429 rate limits and 30min CI timeouts).
-    existing_full_ids = {
-        row[0] for row in conn.execute(
-            "SELECT id FROM written_questions "
-            "WHERE length(questionText) < 255 AND length(answerText) < 255"
+    # A question needs fetching when the fresh bulk text is a stub
+    # (questionText >= 255, answerText >= 258 truncation boundaries) AND the
+    # stored row is not already longer (i.e. not already full-text). The
+    # previous check ("stored len < 255 means done") was inverted — fetched
+    # full text is LONGER than the stub, so every fetched question was
+    # re-fetched every run and the corpus (~340k) never fit the timeout.
+    # Load stored lengths BEFORE insert_questions runs — the upsert's
+    # preserve guard keeps stored full text, so post-insert lengths are
+    # equivalent, but pre-insert is the unambiguous "what we had" state.
+    stored_lens = {
+        row[0]: (row[1] or 0, row[2] or 0)
+        for row in conn.execute(
+            "SELECT id, length(questionText), length(answerText) "
+            "FROM written_questions"
         ).fetchall()
     }
-    logger.info("Skipping full-text fetch for %d questions already in DB with full text",
-                len(existing_full_ids))
 
-    truncated = [q for q in filtered
-                 if q["id"] not in existing_full_ids
-                 and (len(q.get("questionText", "")) >= 255
-                      or len(q.get("answerText", "")) >= 255)]
-    logger.info("Fetching full text for %d truncated questions (parallel, 10 workers)",
-                len(truncated))
+    truncated = []
+    for q in filtered:
+        sq, sa = stored_lens.get(q["id"], (0, 0))
+        q_stub = len(q.get("questionText", "")) >= 255
+        a_stub = len(q.get("answerText", "")) >= 255
+        q_needs = q_stub and sq <= len(q["questionText"])
+        a_needs = a_stub and sa <= len(q["answerText"])
+        if q_needs or a_needs:
+            truncated.append(q)
+
+    total_truncated = len(truncated)
+    if max_full_text is not None and max_full_text > 0:
+        truncated = truncated[:max_full_text]
+    logger.info(
+        "Fetching full text for %d truncated questions (parallel, 10 workers; "
+        "%d total remaining)", len(truncated), total_truncated,
+    )
 
     update_q_sql = "UPDATE written_questions SET questionText = ? WHERE id = ?"
     update_a_sql = "UPDATE written_questions SET answerText = ? WHERE id = ?"
@@ -584,9 +638,9 @@ def main():
     )
     parser.add_argument(
         "--max-full-text", type=int, default=None,
-        help="Maximum number of truncated questions to fetch full text for per run "
-             "(seed mode only). When the limit is reached, the checkpoint DB is saved "
-             "and the script exits with code 2 to signal that more work remains.",
+        help="Maximum number of truncated questions to fetch full text for per run. "
+             "In seed mode, reaching the limit exits with code 2 for the CI batch "
+             "chain; in delta mode the run just publishes with partial progress.",
     )
     args = parser.parse_args()
 
@@ -603,7 +657,7 @@ def main():
             sys.exit(2)
     else:
         build_delta(args.output, args.previous_db, args.schema, args.mps_db,
-                    mp_limit=args.mp_limit)
+                    mp_limit=args.mp_limit, max_full_text=args.max_full_text)
 
 
 if __name__ == "__main__":

@@ -460,7 +460,7 @@ jobs:
       - name: Build Written Questions database (delta mode)
         if: needs.prepare.outputs.mode == 'delta'
         run: |
-          python build_written_questions.py --output written_questions.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_written_questions.db --mps-db mps.db
+          python build_written_questions.py --output written_questions.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_written_questions.db --mps-db mps.db --max-full-text 40000
 
       # --- Seed mode: download the latest checkpoint from the chain ---
 

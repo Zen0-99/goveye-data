@@ -267,13 +267,28 @@ def build_bio_data_table(conn):
 
 
 def insert_bio_data(conn, rows, timestamp_millis):
-    """Batch insert bio_data rows using INSERT OR REPLACE."""
+    """Batch insert bio_data rows.
+
+    Uses UPSERT rather than INSERT OR REPLACE so a NULL dateOfBirth from MNIS
+    never clobbers a DOB previously filled by build_wikipedia_bios.py
+    (--dob-only) — if the Wikipedia step fails or is skipped in a workflow,
+    enriched DOBs would otherwise be silently lost.
+    """
     cursor = conn.cursor()
     insert_sql = """
-        INSERT OR REPLACE INTO bio_data (
+        INSERT INTO bio_data (
             mpId, maidenSpeechDate, dateOfBirth, townOfBirth, countryOfBirth,
             honoursJson, postsJson, committeesJson, lastUpdated
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(mpId) DO UPDATE SET
+            maidenSpeechDate = excluded.maidenSpeechDate,
+            dateOfBirth = COALESCE(excluded.dateOfBirth, bio_data.dateOfBirth),
+            townOfBirth = excluded.townOfBirth,
+            countryOfBirth = excluded.countryOfBirth,
+            honoursJson = excluded.honoursJson,
+            postsJson = excluded.postsJson,
+            committeesJson = excluded.committeesJson,
+            lastUpdated = excluded.lastUpdated
     """
 
     tuples = [

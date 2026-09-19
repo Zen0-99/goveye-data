@@ -23,6 +23,7 @@ import os
 import shutil
 import sqlite3
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
@@ -37,11 +38,12 @@ TABLE_NAMES = ["hansard_contributions"]
 
 # --- Hansard API ---
 
-def fetch_member_counts(member_id, timeout=60, max_retries=3):
+def fetch_member_counts(member_id, timeout=30, max_retries=3):
     """Fetch contribution counts for a single MP from the Hansard API.
 
-    Returns (total_contributions, total_written_answers).
-    Retries on timeout with exponential backoff.
+    Returns (total_contributions, total_written_answers), or None if the
+    fetch failed after all retries — callers skip those MPs entirely so a
+    flaky API day can't zero out stored counts.
     """
     for attempt in range(max_retries):
         try:
@@ -50,8 +52,14 @@ def fetch_member_counts(member_id, timeout=60, max_retries=3):
                 "itemsPerPage": 1,
             }, timeout=timeout)
             if r.status_code != 200:
+                if r.status_code >= 500 and attempt < max_retries - 1:
+                    wait = 2 ** attempt
+                    logger.warning("Hansard API %d for memberId=%d (attempt %d/%d), retrying in %ds",
+                                   r.status_code, member_id, attempt + 1, max_retries, wait)
+                    time.sleep(wait)
+                    continue
                 logger.warning("Hansard API returned %d for memberId=%d", r.status_code, member_id)
-                return 0, 0
+                return None
             data = r.json()
             total_contributions = data.get("TotalContributions", 0)
             total_written_answers = data.get("TotalWrittenAnswers", 0)
@@ -65,7 +73,42 @@ def fetch_member_counts(member_id, timeout=60, max_retries=3):
             else:
                 logger.warning("Hansard API failed for memberId=%d after %d retries: %s",
                                member_id, max_retries, e)
-                return 0, 0
+                return None
+
+
+def fetch_all_counts(mps, skip_ids=None):
+    """Fetch contribution counts for MPs in parallel.
+
+    The Hansard API takes 60s+ on bad days — serial fetching with a 60s
+    timeout and 3 retries blew the 60-minute workflow timeout four weeks
+    running. 8 workers keep wall-clock bounded (~650 calls in minutes).
+
+    Returns (counts, failed) where counts is a list of
+    (member_id, member_name, total_written_answers, total_contributions)
+    and failed is the number of MPs skipped after retry exhaustion.
+    """
+    skip_ids = skip_ids or set()
+    todo = [(mid, name) for mid, name in mps if mid not in skip_ids]
+    counts = []
+    failed = 0
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        future_to_mp = {
+            executor.submit(fetch_member_counts, mid): (mid, name)
+            for mid, name in todo
+        }
+        for i, future in enumerate(as_completed(future_to_mp), 1):
+            mid, name = future_to_mp[future]
+            res = future.result()
+            if res is None:
+                failed += 1
+                continue
+            total_contributions, total_written_answers = res
+            counts.append((mid, name, total_written_answers, total_contributions))
+            if i % 50 == 0:
+                logger.info("Fetched %d/%d MPs", i, len(todo))
+    if failed:
+        logger.warning("Skipped %d MPs after fetch failures — keeping stored counts", failed)
+    return counts, failed
 
 
 def fetch_all_mps_from_db(mps_db_path):
@@ -142,22 +185,8 @@ def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=No
     if mp_limit:
         mps = mps[:mp_limit]
 
-    counts = []
-    total_questions = 0
-    for member_id, member_name in mps:
-        if member_id in skip_ids:
-            continue
-        total_contributions, total_written_answers = fetch_member_counts(member_id)
-        counts.append((member_id, member_name, total_written_answers, total_contributions))
-        total_questions += total_written_answers
-        if (len(counts) % 50) == 0:
-            logger.info("Fetched %d/%d MPs (%d total questions so far)",
-                        len(counts), len(mps), total_questions)
-            # Insert in batches so checkpoint resume works
-            insert_counts(conn, counts, timestamp_millis)
-            counts = []
-        time.sleep(0.5)  # Be gentle with the Hansard API (it's slow)
-
+    counts, failed = fetch_all_counts(mps, skip_ids)
+    total_questions = sum(c[2] for c in counts)
     if counts:
         insert_counts(conn, counts, timestamp_millis)
 
@@ -182,16 +211,7 @@ def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None):
     if mp_limit:
         mps = mps[:mp_limit]
 
-    counts = []
-    for member_id, member_name in mps:
-        total_contributions, total_written_answers = fetch_member_counts(member_id)
-        counts.append((member_id, member_name, total_written_answers, total_contributions))
-        if (len(counts) % 50) == 0:
-            logger.info("Fetched %d/%d MPs", len(counts), len(mps))
-            insert_counts(conn, counts, timestamp_millis)
-            counts = []
-        time.sleep(0.3)
-
+    counts, failed = fetch_all_counts(mps)
     if counts:
         insert_counts(conn, counts, timestamp_millis)
 

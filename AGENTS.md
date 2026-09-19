@@ -113,6 +113,27 @@ When adding a new data layer (new table, new enrichment):
    parity (columns, affinities, PKs, indices, FKs, FTS triggers), which is
    exactly what Room validates on device after migrations.
 
+### Patch-churn rules (learned the hard way)
+
+A delta run that rewrites every row produces a full-table patch — patches
+have hit 445MB. Avoid:
+
+- **Blanket `INSERT OR REPLACE` over enriched columns.** If a bulk API
+  returns stubs/NULLs for columns another step enriches, use UPSERT with a
+  preserve guard (see `build_written_questions.insert_questions`,
+  `build_mnis.insert_bio_data` COALESCE).
+- **Delete+reinsert on AUTOINCREMENT tables.** Re-keying every row churns
+  ids → full-table patch. Match existing rows by natural key and UPDATE in
+  place (see `build_member_details.insert_career_events`).
+- **Two per-API DBs sharing one AUTOINCREMENT table.** Each autoincrements
+  from 1 and merge's `INSERT OR REPLACE` clobbers one source with the
+  other. Partition the id space per source (`WIKIPEDIA_ID_BASE` in
+  `build_member_details.py` / `build_wikipedia_career.py`).
+- **`lastUpdated`-only diffs.** `diff_db.py` excludes `lastUpdated` from
+  row comparison — stamp it freely, it won't trigger an upsert by itself.
+- **BLOB columns** serialize to signed-byte JSON arrays automatically in
+  `diff_db.py` (kotlinx `ByteArray` format).
+
 ## Schema sync
 
 **Automated:** `sync_schema.py` fetches the latest Room schema JSON from the GovEye

@@ -277,27 +277,74 @@ def map_career_event(mp_id, statement, timestamp_millis):
 
 # --- Insertion ---
 
+# mp_career_events.id is AUTOINCREMENT and the table is shared in the merged
+# seed between member_details.db (source='parliament', ids < this base) and
+# this DB. Without a partition both autoincrement from 1 and merge_dbs.py's
+# INSERT OR REPLACE has each source clobber the other's rows on collision.
+WIKIPEDIA_ID_BASE = 1_000_000_000
+
+
 def insert_career_events(conn, rows):
-    """Insert career event rows, replacing existing wikipedia rows per MP first."""
-    cursor = conn.cursor()
+    """Upsert wikipedia-source career event rows, preserving existing IDs.
 
-    # Delete existing wikipedia-source rows for each MP in the batch
-    mp_ids_in_batch = {row[0] for row in rows}
-    for mp_id in mp_ids_in_batch:
-        cursor.execute(
-            "DELETE FROM mp_career_events WHERE mpId = ? AND source = 'wikipedia'",
-            (mp_id,),
-        )
-
-    sql = """
-        INSERT OR REPLACE INTO mp_career_events (
-            mpId, category, name, house, startDate, endDate,
-            additionalInfo, additionalInfoLink, constituencyName, constituencyId,
-            source, lastUpdated
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    Same rationale as build_member_details.insert_career_events: a
+    delete+reinsert churns AUTOINCREMENT ids every run (full-table patches),
+    so existing rows are matched by natural key (mpId, category, name,
+    startDate) — identical rows untouched, changed rows UPDATEd in place, new
+    rows allocated ids from WIKIPEDIA_ID_BASE upward, missing rows deleted.
     """
-    for i in range(0, len(rows), BATCH_SIZE):
-        cursor.executemany(sql, rows[i:i + BATCH_SIZE])
+    if not rows:
+        return
+    cursor = conn.cursor()
+    mp_ids = {row[0] for row in rows}
+
+    existing = {}
+    for mp_id in mp_ids:
+        for r in cursor.execute(
+            "SELECT id, endDate, additionalInfo, category, name, startDate "
+            "FROM mp_career_events WHERE mpId = ? AND source = 'wikipedia'",
+            (mp_id,),
+        ):
+            existing.setdefault((mp_id, r[3], r[4], r[5]), []).append(r)
+
+    cursor.execute(
+        "SELECT COALESCE(MAX(id), ?) FROM mp_career_events WHERE id >= ?",
+        (WIKIPEDIA_ID_BASE - 1, WIKIPEDIA_ID_BASE),
+    )
+    next_id = cursor.fetchone()[0] + 1
+
+    all_ids = {r[0] for bucket in existing.values() for r in bucket}
+    seen_ids = set()
+    updates = []
+    inserts = []
+    for (mp_id, category, name, house, start_date, end_date,
+         add_info, add_link, const_name, const_id, source, ts) in rows:
+        bucket = existing.get((mp_id, category, name, start_date))
+        prev = bucket.pop(0) if bucket else None
+        if prev is None:
+            inserts.append((next_id, mp_id, category, name, house, start_date,
+                            end_date, add_info, add_link, const_name, const_id,
+                            source, ts))
+            next_id += 1
+            continue
+        eid = prev[0]
+        seen_ids.add(eid)
+        if (end_date, add_info) != (prev[1], prev[2]):
+            updates.append((end_date, add_info, ts, eid))
+
+    for eid in sorted(all_ids - seen_ids):
+        cursor.execute("DELETE FROM mp_career_events WHERE id = ?", (eid,))
+    cursor.executemany("""
+        UPDATE mp_career_events SET endDate=?, additionalInfo=?,
+            lastUpdated=? WHERE id=?""", updates)
+    for i in range(0, len(inserts), BATCH_SIZE):
+        cursor.executemany("""
+            INSERT INTO mp_career_events (
+                id, mpId, category, name, house, startDate, endDate,
+                additionalInfo, additionalInfoLink, constituencyName,
+                constituencyId, source, lastUpdated
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            inserts[i:i + BATCH_SIZE])
     conn.commit()
 
 

@@ -85,6 +85,12 @@ def get_table_rows(conn, table_name):
     for row in rows:
         d = dict(zip(columns, row))
         for col in columns:
+            if isinstance(d[col], (bytes, bytearray, memoryview)):
+                # BLOB → JSON array of signed bytes, matching
+                # kotlinx.serialization's ByteArray format (e.g.
+                # historical_members.photo on the app side).
+                d[col] = [b - 256 if b > 127 else b for b in bytes(d[col])]
+                continue
             is_bool_col = (
                 col.lower().startswith("is")
                 or col.lower().startswith("has")
@@ -100,6 +106,18 @@ def get_table_rows(conn, table_name):
 def make_pk_key(row, pk_columns):
     """Create a hashable key tuple from a row's primary key columns."""
     return tuple(row.get(col) for col in pk_columns)
+
+
+# Columns stamped with the build timestamp on every upsert. Excluded from
+# row comparison — otherwise every delta run marks every row changed and
+# each patch is a full-table dump (e.g. written_questions patches were
+# 445MB). A row with real changes still emits its fresh stamp.
+STAMP_COLUMNS = {"lastUpdated"}
+
+
+def _comparable(row):
+    """Row dict minus build-stamp columns, for change detection."""
+    return {k: v for k, v in row.items() if k not in STAMP_COLUMNS}
 
 
 def diff_table(new_conn, prev_conn, table_name, pk_columns, full_upsert=False):
@@ -172,7 +190,7 @@ def diff_table(new_conn, prev_conn, table_name, pk_columns, full_upsert=False):
     for key, new_row in new_map.items():
         if key not in prev_map:
             upserts.append(new_row)
-        elif new_row != prev_map[key]:
+        elif _comparable(new_row) != _comparable(prev_map[key]):
             upserts.append(new_row)
 
     # Deletes: primary keys in previous but not in new
