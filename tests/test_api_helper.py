@@ -88,7 +88,7 @@ class TestApiGet(unittest.TestCase):
         """api_helper exports the expected constants."""
         self.assertEqual(api_helper.API_DELAY, 0.2)
         self.assertEqual(api_helper.API_TIMEOUT, 60)
-        self.assertEqual(api_helper.API_MAX_RETRIES, 3)
+        self.assertEqual(api_helper.API_MAX_RETRIES, 5)
         self.assertEqual(api_helper.BATCH_SIZE, 1000)
         self.assertIsNotNone(api_helper.logger)
 

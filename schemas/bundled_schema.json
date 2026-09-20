@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
   "database": {
-    "version": 26,
-    "identityHash": "bb477f0c47d113f1182de836083163e2",
+    "version": 35,
+    "identityHash": "a71fe6417839101ec92a8f27145043b8",
     "entities": [
       {
         "tableName": "mps",
@@ -428,7 +428,18 @@
             "divisionId",
             "memberId"
           ]
-        }
+        },
+        "indices": [
+          {
+            "name": "index_division_votes_memberId",
+            "unique": false,
+            "columnNames": [
+              "memberId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_division_votes_memberId` ON `${TABLE_NAME}` (`memberId`)"
+          }
+        ]
       },
       {
         "tableName": "bills",
@@ -1828,6 +1839,99 @@
         }
       },
       {
+        "tableName": "mp_career_events",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `mpId` INTEGER NOT NULL, `category` TEXT NOT NULL, `name` TEXT, `house` INTEGER, `startDate` TEXT, `endDate` TEXT, `additionalInfo` TEXT, `additionalInfoLink` TEXT, `constituencyName` TEXT, `constituencyId` INTEGER, `source` TEXT NOT NULL, `lastUpdated` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mpId",
+            "columnName": "mpId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "category",
+            "columnName": "category",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "house",
+            "columnName": "house",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "startDate",
+            "columnName": "startDate",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "endDate",
+            "columnName": "endDate",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "additionalInfo",
+            "columnName": "additionalInfo",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "additionalInfoLink",
+            "columnName": "additionalInfoLink",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "constituencyName",
+            "columnName": "constituencyName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "constituencyId",
+            "columnName": "constituencyId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastUpdated",
+            "columnName": "lastUpdated",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_mp_career_events_mpId",
+            "unique": false,
+            "columnNames": [
+              "mpId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_mp_career_events_mpId` ON `${TABLE_NAME}` (`mpId`)"
+          }
+        ]
+      },
+      {
         "tableName": "division_tags",
         "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`divisionId` INTEGER NOT NULL, `tag` TEXT NOT NULL, `hitCount` INTEGER NOT NULL, PRIMARY KEY(`divisionId`, `tag`))",
         "fields": [
@@ -2047,7 +2151,7 @@
       },
       {
         "tableName": "written_statements",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `memberId` INTEGER NOT NULL, `memberRole` TEXT NOT NULL, `uin` TEXT NOT NULL, `dateMade` TEXT NOT NULL, `answeringBodyId` INTEGER NOT NULL, `answeringBodyName` TEXT NOT NULL, `title` TEXT NOT NULL, `text` TEXT NOT NULL, `house` INTEGER NOT NULL, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `memberId` INTEGER NOT NULL, `memberRole` TEXT NOT NULL, `uin` TEXT NOT NULL, `dateMade` TEXT NOT NULL, `answeringBodyId` INTEGER NOT NULL, `answeringBodyName` TEXT NOT NULL, `title` TEXT NOT NULL, `text` TEXT NOT NULL, `house` INTEGER NOT NULL, `lastUpdated` INTEGER NOT NULL, `hasLinkedStatements` INTEGER NOT NULL, `linkedStatementsJson` TEXT, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -2114,6 +2218,17 @@
             "columnName": "lastUpdated",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "hasLinkedStatements",
+            "columnName": "hasLinkedStatements",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "linkedStatementsJson",
+            "columnName": "linkedStatementsJson",
+            "affinity": "TEXT"
           }
         ],
         "primaryKey": {
@@ -2125,7 +2240,7 @@
       },
       {
         "tableName": "written_questions",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `memberId` INTEGER NOT NULL, `uin` TEXT NOT NULL, `dateTabled` TEXT NOT NULL, `answeringBodyId` INTEGER NOT NULL, `answeringBodyName` TEXT NOT NULL, `questionText` TEXT NOT NULL, `house` INTEGER NOT NULL, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `memberId` INTEGER NOT NULL, `uin` TEXT NOT NULL, `dateTabled` TEXT NOT NULL, `answeringBodyId` INTEGER NOT NULL, `answeringBodyName` TEXT NOT NULL, `questionText` TEXT NOT NULL, `house` INTEGER NOT NULL, `lastUpdated` INTEGER NOT NULL, `heading` TEXT NOT NULL, `dateForAnswer` TEXT NOT NULL, `dateAnswered` TEXT NOT NULL, `answerText` TEXT NOT NULL, `answeringMemberId` INTEGER NOT NULL, `isWithdrawn` INTEGER NOT NULL, `answerIsHolding` INTEGER NOT NULL, `answerIsCorrection` INTEGER NOT NULL, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -2178,6 +2293,54 @@
           {
             "fieldPath": "lastUpdated",
             "columnName": "lastUpdated",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "heading",
+            "columnName": "heading",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dateForAnswer",
+            "columnName": "dateForAnswer",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dateAnswered",
+            "columnName": "dateAnswered",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "answerText",
+            "columnName": "answerText",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "answeringMemberId",
+            "columnName": "answeringMemberId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isWithdrawn",
+            "columnName": "isWithdrawn",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "answerIsHolding",
+            "columnName": "answerIsHolding",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "answerIsCorrection",
+            "columnName": "answerIsCorrection",
             "affinity": "INTEGER",
             "notNull": true
           }
@@ -2462,7 +2625,7 @@
       },
       {
         "tableName": "party_leaders",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`partyId` INTEGER NOT NULL, `memberId` INTEGER NOT NULL, `title` TEXT NOT NULL, PRIMARY KEY(`partyId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`partyId` INTEGER NOT NULL, `memberId` INTEGER NOT NULL, `title` TEXT NOT NULL, `leaderSinceDate` TEXT, PRIMARY KEY(`partyId`))",
         "fields": [
           {
             "fieldPath": "partyId",
@@ -2481,6 +2644,11 @@
             "columnName": "title",
             "affinity": "TEXT",
             "notNull": true
+          },
+          {
+            "fieldPath": "leaderSinceDate",
+            "columnName": "leaderSinceDate",
+            "affinity": "TEXT"
           }
         ],
         "primaryKey": {
@@ -2536,7 +2704,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'bb477f0c47d113f1182de836083163e2')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'a71fe6417839101ec92a8f27145043b8')"
     ]
   }
 }

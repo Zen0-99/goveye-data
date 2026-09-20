@@ -178,8 +178,8 @@ class TestBucketMapping(unittest.TestCase):
     def test_bucket_gifts(self):
         self.assertEqual(build_interests.get_bucket("3"), "Gifts")
 
-    def test_bucket_gifts_subcategory(self):
-        self.assertEqual(build_interests.get_bucket("4"), "Gifts")
+    def test_bucket_overseas_visits(self):
+        self.assertEqual(build_interests.get_bucket("4"), "Overseas Visits")
 
     def test_bucket_land_property(self):
         self.assertEqual(build_interests.get_bucket("6"), "Land/Property")
@@ -187,8 +187,8 @@ class TestBucketMapping(unittest.TestCase):
     def test_bucket_shareholdings(self):
         self.assertEqual(build_interests.get_bucket("7"), "Shareholdings")
 
-    def test_bucket_other(self):
-        self.assertEqual(build_interests.get_bucket("8"), "Other")
+    def test_bucket_miscellaneous(self):
+        self.assertEqual(build_interests.get_bucket("8"), "Miscellaneous")
 
     def test_bucket_unknown(self):
         self.assertEqual(build_interests.get_bucket("99"), None)

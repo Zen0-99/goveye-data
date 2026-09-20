@@ -50,21 +50,22 @@ def make_atom_feed(entries, next_link=None):
         lines.append(f'<title>{e.get("title", "")}</title>')
         lines.append(f'<updated>{e.get("updated", "2026-08-20T10:00:00Z")}</updated>')
         lines.append(f'<published>{e.get("published", "2026-08-20T10:00:00Z")}</published>')
+        # Real feed shape: <ukm:DocumentMainType Value="..."/><ukm:Year Value="..."/> etc.
         if e.get("type"):
-            lines.append(f'<leg:type>{e["type"]}</leg:type>')
+            lines.append(f'<leg:DocumentMainType Value="{e["type"]}"/>')
         if e.get("year"):
-            lines.append(f'<leg:year>{e["year"]}</leg:year>')
+            lines.append(f'<leg:Year Value="{e["year"]}"/>')
         if e.get("number"):
-            lines.append(f'<leg:number>{e["number"]}</leg:number>')
+            lines.append(f'<leg:Number Value="{e["number"]}"/>')
         if e.get("date"):
-            lines.append(f'<leg:date>{e["date"]}</leg:date>')
+            lines.append(f'<leg:CreationDate Date="{e["date"]}"/>')
         lines.append('</entry>')
 
     lines.append('</feed>')
     return "\n".join(lines)
 
 
-def make_legislation_entry(entry_id, title, leg_type="uksi", year=2026, number=500, date="2026-08-20"):
+def make_legislation_entry(entry_id, title, leg_type="UnitedKingdomStatutoryInstrument", year=2026, number=500, date="2026-08-20"):
     """Build a minimal legislation entry dict."""
     return {
         "id": entry_id,
@@ -111,8 +112,8 @@ class TestFetchNewLegislation(unittest.TestCase):
     def test_single_page(self, mock_api_get):
         """Fetch a single page with 2 entries."""
         entries = [
-            make_legislation_entry("http://www.legislation.gov.uk/uksi/2026/500", "SI 500", "uksi"),
-            make_legislation_entry("http://www.legislation.gov.uk/ukpga/2026/10", "Act 10", "ukpga"),
+            make_legislation_entry("http://www.legislation.gov.uk/uksi/2026/500", "SI 500", "UnitedKingdomStatutoryInstrument"),
+            make_legislation_entry("http://www.legislation.gov.uk/ukpga/2026/10", "Act 10", "UnitedKingdomPublicGeneralAct"),
         ]
         mock_response = MagicMock()
         mock_response.text = make_atom_feed(entries, next_link=None)
@@ -124,11 +125,11 @@ class TestFetchNewLegislation(unittest.TestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0]["id"], "http://www.legislation.gov.uk/uksi/2026/500")
         self.assertEqual(result[0]["title"], "SI 500")
-        self.assertEqual(result[0]["type"], "uksi")
+        self.assertEqual(result[0]["type"], "UnitedKingdomStatutoryInstrument")
         self.assertEqual(result[0]["year"], 2026)
         self.assertEqual(result[0]["number"], 500)
         self.assertEqual(result[0]["url"], "http://www.legislation.gov.uk/uksi/2026/500")
-        self.assertEqual(result[1]["type"], "ukpga")
+        self.assertEqual(result[1]["type"], "UnitedKingdomPublicGeneralAct")
         # Only 1 API call (no next link)
         self.assertEqual(mock_api_get.call_count, 1)
 
@@ -175,13 +176,13 @@ class TestMapLegislationToEntity(unittest.TestCase):
     def test_full_mapping(self):
         entry = make_legislation_entry(
             "http://www.legislation.gov.uk/uksi/2026/500", "SI 500",
-            leg_type="uksi", year=2026, number=500, date="2026-08-20",
+            leg_type="UnitedKingdomStatutoryInstrument", year=2026, number=500, date="2026-08-20",
         )
         row = build_legislation.map_legislation_to_entity(entry, 1700000000000, 1)
 
         self.assertEqual(row[0], 1)  # id (sequential)
         self.assertEqual(row[1], "SI 500")  # title
-        self.assertEqual(row[2], "uksi")  # type
+        self.assertEqual(row[2], "UnitedKingdomStatutoryInstrument")  # type
         self.assertEqual(row[3], 2026)  # year
         self.assertEqual(row[4], 500)  # number
         self.assertEqual(row[5], "2026-08-20")  # date
@@ -212,8 +213,8 @@ class TestSeedBuild(unittest.TestCase):
     def test_seed_inserts_legislation(self, mock_api_get):
         """Seed build fetches legislation and inserts into DB."""
         entries = [
-            make_legislation_entry("http://leg/1", "SI 100", "uksi", 2026, 100),
-            make_legislation_entry("http://leg/2", "Act 5", "ukpga", 2026, 5),
+            make_legislation_entry("http://leg/1", "SI 100", "UnitedKingdomStatutoryInstrument", 2026, 100),
+            make_legislation_entry("http://leg/2", "Act 5", "UnitedKingdomPublicGeneralAct", 2026, 5),
         ]
         mock_response = MagicMock()
         mock_response.text = make_atom_feed(entries, next_link=None)
@@ -230,7 +231,7 @@ class TestSeedBuild(unittest.TestCase):
             "SELECT title, type, year, number, url FROM legislation WHERE id=1"
         ).fetchone()
         self.assertEqual(row[0], "SI 100")
-        self.assertEqual(row[1], "uksi")
+        self.assertEqual(row[1], "UnitedKingdomStatutoryInstrument")
         self.assertEqual(row[2], 2026)
         self.assertEqual(row[3], 100)
         self.assertEqual(row[4], "http://leg/1")

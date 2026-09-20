@@ -50,6 +50,12 @@ class TestLordsDivisionInsert(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.tmpdir, "lords_votes.db")
+        # TWFY debate-URL lookups hit the real network otherwise
+        self.twfy_patcher = patch(
+            "build_lords_votes.fetch_twfy_debate_url", return_value=None
+        )
+        self.twfy_patcher.start()
+        self.addCleanup(self.twfy_patcher.stop)
 
     @patch("build_lords_votes.api_get")
     def test_lords_division_insert(self, mock_api_get):
@@ -73,7 +79,7 @@ class TestLordsDivisionInsert(unittest.TestCase):
         c = sqlite3.connect(self.db_path)
         div_count = c.execute("SELECT COUNT(*) FROM divisions").fetchone()[0]
         self.assertEqual(div_count, 1)
-        house = c.execute("SELECT house FROM divisions WHERE id=200").fetchone()[0]
+        house = c.execute("SELECT house FROM divisions WHERE id=1000200").fetchone()[0]
         self.assertEqual(house, 2)
         vote_count = c.execute("SELECT COUNT(*) FROM division_votes").fetchone()[0]
         self.assertEqual(vote_count, 2)  # 1 Content + 1 NotContent
@@ -87,6 +93,11 @@ class TestLordsDeltaNewDivisions(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp()
         self.prev_db = os.path.join(self.tmpdir, "prev_lords_votes.db")
         self.db_path = os.path.join(self.tmpdir, "lords_votes.db")
+        self.twfy_patcher = patch(
+            "build_lords_votes.fetch_twfy_debate_url", return_value=None
+        )
+        self.twfy_patcher.start()
+        self.addCleanup(self.twfy_patcher.stop)
 
     @patch("build_lords_votes.api_get")
     def test_delta_new_divisions(self, mock_api_get):
@@ -98,7 +109,7 @@ class TestLordsDeltaNewDivisions(unittest.TestCase):
         conn.execute(
             "INSERT OR REPLACE INTO divisions (id, title, date, publicationUpdated, "
             "number, isDeferred, ayeCount, noCount, house, lastUpdated) "
-            "VALUES (200, 'D200', '2026-01-01', NULL, 200, 0, 100, 50, 2, ?)", (ts,))
+            "VALUES (1000200, 'D200', '2026-01-01', NULL, 200, 0, 100, 50, 2, ?)", (ts,))
         conn.commit()
         conn.close()
 
@@ -123,7 +134,7 @@ class TestLordsDeltaNewDivisions(unittest.TestCase):
         total = c.execute("SELECT COUNT(*) FROM divisions WHERE house=2").fetchone()[0]
         self.assertEqual(total, 2)  # 1 old + 1 new
         has_201 = c.execute(
-            "SELECT COUNT(*) FROM divisions WHERE id=201"
+            "SELECT COUNT(*) FROM divisions WHERE id=1000201"
         ).fetchone()[0]
         self.assertEqual(has_201, 1)
         c.close()
@@ -136,18 +147,24 @@ class TestLordsCheckpoint(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.tmpdir, "lords_votes.db")
         self.checkpoint_db = os.path.join(self.tmpdir, "checkpoint.db")
+        self.twfy_patcher = patch(
+            "build_lords_votes.fetch_twfy_debate_url", return_value=None
+        )
+        self.twfy_patcher.start()
+        self.addCleanup(self.twfy_patcher.stop)
 
     def _make_checkpoint(self, div_id):
-        """Create a checkpoint DB with one Lords division."""
+        """Create a checkpoint DB with one Lords division (stored id is API id + 1M offset)."""
         conn = schema_module.create_database_with_tables(
             self.checkpoint_db, SCHEMA_PATH, ["divisions", "division_votes"],
         )
         ts = 1700000000000
+        stored_id = div_id + 1_000_000
         conn.execute(
             "INSERT OR REPLACE INTO divisions (id, title, date, publicationUpdated, "
             "number, isDeferred, ayeCount, noCount, house, lastUpdated) "
             "VALUES (?, 'D', '2026-01-01', NULL, ?, 0, 100, 50, 2, ?)",
-            (div_id, div_id, ts,))
+            (stored_id, div_id, ts,))
         conn.commit()
         conn.close()
 

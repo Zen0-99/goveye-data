@@ -78,6 +78,11 @@ class TestCommonsDivisionInsert(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.tmpdir, "commons_votes.db")
+        self.twfy_patcher = patch(
+            "build_commons_votes.fetch_twfy_debate_url", return_value=None
+        )
+        self.twfy_patcher.start()
+        self.addCleanup(self.twfy_patcher.stop)
 
     @patch("build_commons_votes.api_get")
     def test_commons_division_insert(self, mock_api_get):
@@ -114,6 +119,11 @@ class TestCommonsDeltaNewDivisions(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp()
         self.prev_db = os.path.join(self.tmpdir, "prev_commons_votes.db")
         self.db_path = os.path.join(self.tmpdir, "commons_votes.db")
+        self.twfy_patcher = patch(
+            "build_commons_votes.fetch_twfy_debate_url", return_value=None
+        )
+        self.twfy_patcher.start()
+        self.addCleanup(self.twfy_patcher.stop)
 
     @patch("build_commons_votes.api_get")
     def test_delta_new_divisions(self, mock_api_get):
@@ -167,6 +177,11 @@ class TestCommonsCheckpoint(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.tmpdir, "commons_votes.db")
         self.checkpoint_db = os.path.join(self.tmpdir, "checkpoint.db")
+        self.twfy_patcher = patch(
+            "build_commons_votes.fetch_twfy_debate_url", return_value=None
+        )
+        self.twfy_patcher.start()
+        self.addCleanup(self.twfy_patcher.stop)
 
     def _make_checkpoint(self, div_id):
         """Create a checkpoint DB with one Commons division."""

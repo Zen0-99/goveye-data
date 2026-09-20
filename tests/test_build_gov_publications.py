@@ -65,16 +65,21 @@ def make_content_response(path, title, body_html="<p>Body text about <strong>NHS
 
 
 def make_org_response(slugs):
-    """Build a mock GOV.UK Search API aggregation response for organisations."""
+    """Build a mock GOV.UK Organisations API page response.
+
+    Shape matches /api/organisations?page=N: results carry format + details.slug;
+    only current "Ministerial department" entries are used by the builder.
+    """
     return {
-        "aggregates": {
-            "organisations": {
-                "options": [
-                    {"value": {"slug": slug, "title": slug.replace("-", " ").title()}}
-                    for slug in slugs
-                ]
+        "pages": 1,
+        "results": [
+            {
+                "format": "Ministerial department",
+                "details": {"slug": slug, "title": slug.replace("-", " ").title()},
+                "superseding_organisations": [],
             }
-        }
+            for slug in slugs
+        ],
     }
 
 
@@ -157,17 +162,19 @@ class TestMapPublicationToEntity(unittest.TestCase):
         self.assertEqual(row[7], "2026-08-20T10:00:00.000Z")  # firstPublishedAt
         self.assertEqual(row[8], "2026-08-20T12:00:00.000Z")  # publicUpdatedAt
         self.assertEqual(row[9], "https://assets.publishing.service.gov.uk/budget.jpg")  # imageUrl
-        self.assertEqual(row[10], 1700000000000)  # lastUpdated
+        self.assertEqual(row[10], "")  # bodyText (not passed)
+        self.assertEqual(row[11], 1700000000000)  # lastUpdated
 
-    def test_entity_tuple_does_not_contain_body(self):
-        """D-03: entity tuple must NOT contain body text field."""
+    def test_entity_tuple_contains_body(self):
+        """bodyText ships on the entity (index 10) when provided."""
         search_item = make_search_result("/government/news/test", "Test")
         content = make_content_response("/government/news/test", "Test", body_html="<p>Body text</p>")
-        row = build_gov_publications.map_publication_to_entity(search_item, content, 1700000000000, 1)
-        # Entity tuple has 11 fields (matching GovernmentPublicationEntity)
-        self.assertEqual(len(row), 11)
-        # None of the fields should be the raw body text
-        self.assertNotIn("Body text", row)
+        row = build_gov_publications.map_publication_to_entity(
+            search_item, content, 1700000000000, 1, body_text="Body text",
+        )
+        self.assertEqual(len(row), 12)
+        self.assertEqual(row[10], "Body text")  # bodyText
+        self.assertEqual(row[11], 1700000000000)  # lastUpdated
 
     def test_fallback_to_search_item_when_content_none(self):
         search_item = make_search_result("/government/news/fallback", "Fallback Title")
@@ -240,7 +247,7 @@ class TestSeedBuild(unittest.TestCase):
         self.assertEqual(count, 2)
 
         # Verify bodyText IS in government_publications table (D-03 updated)
-        cols = [desc[1] for desc in c.execute("SELECT * FROM government_publications LIMIT 0").description]
+        cols = [desc[0] for desc in c.execute("SELECT * FROM government_publications LIMIT 0").description]
         self.assertIn("bodyText", cols)
 
         # Verify bodyText is populated

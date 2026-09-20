@@ -246,11 +246,15 @@ class TestMergeDbs(unittest.TestCase):
             interests_db=None,
         )
 
+        # Expected hash tracks the schema JSON (changes with schema versions)
+        import json
+        expected = json.load(open(SCHEMA_PATH))["database"]["identityHash"]
+
         c = sqlite3.connect(self.goveye_db)
         hash_val = c.execute(
             "SELECT identity_hash FROM room_master_table WHERE id=42"
         ).fetchone()[0]
-        self.assertEqual(hash_val, "ebd3a258ffd1c36a696959347543c45a")
+        self.assertEqual(hash_val, expected)
         c.close()
 
     def test_merge_fts_populated(self):

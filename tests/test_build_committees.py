@@ -17,22 +17,19 @@ import build_committees
 
 SCHEMA_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "schemas", "8.json",
+    "schemas", "bundled_schema.json",
 )
 
 
-def make_mp(mp_id):
+def make_member_item(mnis_id):
+    """Committee member item as returned by /Committees/{id}/Members.
+
+    A role with endDate=None means currently serving.
+    """
     return {
-        "id": mp_id,
-        "nameListAs": f"Test, MP {mp_id}",
-        "nameDisplayAs": f"MP Test {mp_id}",
-        "latestParty": {"id": 15, "name": "Labour", "abbreviation": "Lab"},
-        "latestHouseMembership": {
-            "membershipFromId": 100,
-            "membershipFrom": "Test North",
-            "house": 1,
-            "membershipStatus": {"statusIsActive": True},
-        },
+        "memberInfo": {"mnisId": mnis_id, "house": "Commons"},
+        "name": f"MP Test {mnis_id}",
+        "roles": [{"endDate": None}],
     }
 
 
@@ -78,29 +75,39 @@ class TestCommitteeInsertion(unittest.TestCase):
 
     @patch("build_committees.api_get")
     def test_committee_insertion(self, mock_api_get):
-        """Seed build with --mp-limit 2 fetches committees per MP."""
-        # api_get calls: 1) MP search, 2) committees for MP 1, 3) committees for MP 2
-        mp_page = {"items": [{"value": make_mp(1)}, {"value": make_mp(2)}]}
-
-        mock_mp = MagicMock()
-        mock_mp.json.return_value = mp_page
-        mock_mp.raise_for_status = MagicMock()
-
-        mock_comm_1 = MagicMock()
-        mock_comm_1.json.return_value = {
-            "items": [make_committee_item(100, "Comm A")]
+        """Seed build fetches committee list, then detail + members per committee."""
+        # api_get calls: 1) committee list, 2-3) detail + members for comm 100,
+        # 4-5) detail + members for comm 200
+        mock_list = MagicMock()
+        mock_list.json.return_value = {
+            "items": [
+                make_committee_item(100, "Comm A"),
+                make_committee_item(200, "Comm B"),
+            ]
         }
-        mock_comm_1.raise_for_status = MagicMock()
+        mock_list.raise_for_status = MagicMock()
 
-        mock_comm_2 = MagicMock()
-        mock_comm_2.json.return_value = {
-            "items": [make_committee_item(200, "Comm B"), make_committee_item(100, "Comm A")]
+        def mock_detail():
+            m = MagicMock()
+            m.json.return_value = {}
+            m.raise_for_status = MagicMock()
+            return m
+
+        mock_mem_100 = MagicMock()
+        mock_mem_100.json.return_value = {
+            "items": [make_member_item(1), make_member_item(2)]
         }
-        mock_comm_2.raise_for_status = MagicMock()
+        mock_mem_100.raise_for_status = MagicMock()
 
-        mock_api_get.side_effect = [mock_mp, mock_comm_1, mock_comm_2]
+        mock_mem_200 = MagicMock()
+        mock_mem_200.json.return_value = {"items": [make_member_item(2)]}
+        mock_mem_200.raise_for_status = MagicMock()
 
-        build_committees.build_seed(self.db_path, SCHEMA_PATH, mp_limit=2)
+        mock_api_get.side_effect = [
+            mock_list, mock_detail(), mock_mem_100, mock_detail(), mock_mem_200,
+        ]
+
+        build_committees.build_seed(self.db_path, SCHEMA_PATH)
 
         c = sqlite3.connect(self.db_path)
         # Committee 100 appears for both MPs but deduped by PK → 2 unique committees
@@ -133,29 +140,31 @@ class TestDeltaUpsert(unittest.TestCase):
         conn = schema_module.create_database_with_tables(
             self.prev_db, SCHEMA_PATH, ["committees", "mp_committee_cross_ref"],
         )
-        build_committees.insert_committees(
-            conn, [make_committee_item(100, "Comm A")], 1700000000000,
+        row = build_committees.map_committee_to_entity(
+            make_committee_item(100, "Comm A"), None, 1700000000000,
         )
-        build_committees.insert_cross_refs(conn, 1, [100], 1700000000000)
+        build_committees.insert_committees(conn, [row])
+        build_committees.insert_cross_refs(conn, 100, [1], 1700000000000)
         conn.close()
 
         # Delta: committee 100 now has endDate → inactive
-        mp_page = {"items": [{"value": make_mp(1)}]}
-        mock_mp = MagicMock()
-        mock_mp.json.return_value = mp_page
-        mock_mp.raise_for_status = MagicMock()
-
-        mock_comm = MagicMock()
-        mock_comm.json.return_value = {
+        mock_list = MagicMock()
+        mock_list.json.return_value = {
             "items": [make_committee_item(100, "Comm A", end_date="2026-06-01")]
         }
-        mock_comm.raise_for_status = MagicMock()
+        mock_list.raise_for_status = MagicMock()
 
-        mock_api_get.side_effect = [mock_mp, mock_comm]
+        mock_detail = MagicMock()
+        mock_detail.json.return_value = {}
+        mock_detail.raise_for_status = MagicMock()
 
-        build_committees.build_delta(
-            self.db_path, self.prev_db, SCHEMA_PATH, mp_limit=1,
-        )
+        mock_mem = MagicMock()
+        mock_mem.json.return_value = {"items": [make_member_item(1)]}
+        mock_mem.raise_for_status = MagicMock()
+
+        mock_api_get.side_effect = [mock_list, mock_detail, mock_mem]
+
+        build_committees.build_delta(self.db_path, self.prev_db, SCHEMA_PATH)
 
         c = sqlite3.connect(self.db_path)
         is_active = c.execute(
@@ -173,47 +182,61 @@ class TestCommitteesCheckpoint(unittest.TestCase):
         self.db_path = os.path.join(self.tmpdir, "committees.db")
         self.checkpoint_db = os.path.join(self.tmpdir, "checkpoint.db")
 
-    def _make_checkpoint(self, mp_ids):
-        """Create a checkpoint DB with cross-refs for the given MP IDs."""
+    def _make_checkpoint(self, committee_ids):
+        """Create a checkpoint DB with cross-refs for the given committee IDs."""
         conn = schema_module.create_database_with_tables(
             self.checkpoint_db, SCHEMA_PATH, ["committees", "mp_committee_cross_ref"],
         )
-        for mp_id in mp_ids:
-            build_committees.insert_cross_refs(conn, mp_id, [100], 1700000000000)
+        for cid in committee_ids:
+            build_committees.insert_cross_refs(conn, cid, [1], 1700000000000)
         conn.commit()
         conn.close()
 
-    @patch("build_committees.api_get")
-    def test_committees_checkpoint_skips_processed_mps(self, mock_api_get):
-        """Checkpoint DB has cross-refs for MP 1; only MP 2 is fetched."""
-        self._make_checkpoint([1])
+    def _committee_list_mock(self, *items):
+        m = MagicMock()
+        m.json.return_value = {"items": list(items)}
+        m.raise_for_status = MagicMock()
+        return m
 
-        # API returns MPs 1 and 2; only MP 2 should be fetched
-        mp_page = {"items": [{"value": make_mp(1)}, {"value": make_mp(2)}]}
+    def _detail_mock(self):
+        m = MagicMock()
+        m.json.return_value = {}
+        m.raise_for_status = MagicMock()
+        return m
 
-        mock_mp = MagicMock()
-        mock_mp.json.return_value = mp_page
-        mock_mp.raise_for_status = MagicMock()
-
-        mock_comm_2 = MagicMock()
-        mock_comm_2.json.return_value = {
-            "items": [make_committee_item(200, "Comm B")]
+    def _members_mock(self, *mnis_ids):
+        m = MagicMock()
+        m.json.return_value = {
+            "items": [make_member_item(i) for i in mnis_ids]
         }
-        mock_comm_2.raise_for_status = MagicMock()
+        m.raise_for_status = MagicMock()
+        return m
 
-        mock_api_get.side_effect = [mock_mp, mock_comm_2]
+    @patch("build_committees.api_get")
+    def test_committees_checkpoint_skips_processed_committees(self, mock_api_get):
+        """Checkpoint has cross-refs for committee 100; its member fetch is skipped."""
+        self._make_checkpoint([100])
+
+        # List returns committees 100 and 200; member fetch only for 200
+        mock_api_get.side_effect = [
+            self._committee_list_mock(
+                make_committee_item(100, "Comm A"),
+                make_committee_item(200, "Comm B"),
+            ),
+            self._detail_mock(),          # detail for 100
+            self._detail_mock(),          # detail for 200
+            self._members_mock(2),        # members for 200 (100 skipped)
+        ]
 
         build_committees.build_seed(
-            self.db_path, SCHEMA_PATH, mp_limit=2,
+            self.db_path, SCHEMA_PATH,
             checkpoint_db=self.checkpoint_db,
         )
 
-        # Only 2 api_get calls: 1 for MP list + 1 for MP 2's committees
-        # MP 1 was skipped (in checkpoint)
-        self.assertEqual(mock_api_get.call_count, 2)
+        # 4 api_get calls: 1 list + 2 details + 1 members (100's members skipped)
+        self.assertEqual(mock_api_get.call_count, 4)
 
         c = sqlite3.connect(self.db_path)
-        # MP 1's cross-ref from checkpoint + MP 2's new cross-ref
         xref_count = c.execute(
             "SELECT COUNT(*) FROM mp_committee_cross_ref"
         ).fetchone()[0]
@@ -223,22 +246,14 @@ class TestCommitteesCheckpoint(unittest.TestCase):
     @patch("build_committees.api_get")
     def test_seed_with_nonexistent_checkpoint_starts_fresh(self, mock_api_get):
         """Non-existent checkpoint path -> fresh seed."""
-        mp_page = {"items": [{"value": make_mp(1)}]}
-
-        mock_mp = MagicMock()
-        mock_mp.json.return_value = mp_page
-        mock_mp.raise_for_status = MagicMock()
-
-        mock_comm = MagicMock()
-        mock_comm.json.return_value = {
-            "items": [make_committee_item(100, "Comm A")]
-        }
-        mock_comm.raise_for_status = MagicMock()
-
-        mock_api_get.side_effect = [mock_mp, mock_comm]
+        mock_api_get.side_effect = [
+            self._committee_list_mock(make_committee_item(100, "Comm A")),
+            self._detail_mock(),
+            self._members_mock(1),
+        ]
 
         build_committees.build_seed(
-            self.db_path, SCHEMA_PATH, mp_limit=1,
+            self.db_path, SCHEMA_PATH,
             checkpoint_db=os.path.join(self.tmpdir, "nonexistent.db"),
         )
 
@@ -252,21 +267,13 @@ class TestCommitteesCheckpoint(unittest.TestCase):
     @patch("build_committees.api_get")
     def test_seed_without_checkpoint_starts_fresh(self, mock_api_get):
         """No checkpoint_db -> fresh seed (backward compatible)."""
-        mp_page = {"items": [{"value": make_mp(1)}]}
+        mock_api_get.side_effect = [
+            self._committee_list_mock(make_committee_item(100, "Comm A")),
+            self._detail_mock(),
+            self._members_mock(1),
+        ]
 
-        mock_mp = MagicMock()
-        mock_mp.json.return_value = mp_page
-        mock_mp.raise_for_status = MagicMock()
-
-        mock_comm = MagicMock()
-        mock_comm.json.return_value = {
-            "items": [make_committee_item(100, "Comm A")]
-        }
-        mock_comm.raise_for_status = MagicMock()
-
-        mock_api_get.side_effect = [mock_mp, mock_comm]
-
-        build_committees.build_seed(self.db_path, SCHEMA_PATH, mp_limit=1)
+        build_committees.build_seed(self.db_path, SCHEMA_PATH)
 
         c = sqlite3.connect(self.db_path)
         xref_count = c.execute(
@@ -278,27 +285,22 @@ class TestCommitteesCheckpoint(unittest.TestCase):
     @patch("build_committees.api_get")
     def test_checkpoint_same_as_output(self, mock_api_get):
         """--checkpoint-db and --output same path -> no truncation, resumes."""
-        self._make_checkpoint([1])
+        self._make_checkpoint([100])
         import shutil
         shutil.copy2(self.checkpoint_db, self.db_path)
 
-        # API returns MPs 1 and 2; only MP 2 should be fetched
-        mp_page = {"items": [{"value": make_mp(1)}, {"value": make_mp(2)}]}
-
-        mock_mp = MagicMock()
-        mock_mp.json.return_value = mp_page
-        mock_mp.raise_for_status = MagicMock()
-
-        mock_comm_2 = MagicMock()
-        mock_comm_2.json.return_value = {
-            "items": [make_committee_item(200, "Comm B")]
-        }
-        mock_comm_2.raise_for_status = MagicMock()
-
-        mock_api_get.side_effect = [mock_mp, mock_comm_2]
+        mock_api_get.side_effect = [
+            self._committee_list_mock(
+                make_committee_item(100, "Comm A"),
+                make_committee_item(200, "Comm B"),
+            ),
+            self._detail_mock(),          # detail for 100
+            self._detail_mock(),          # detail for 200
+            self._members_mock(2),        # members for 200 (100 skipped)
+        ]
 
         build_committees.build_seed(
-            self.db_path, SCHEMA_PATH, mp_limit=2,
+            self.db_path, SCHEMA_PATH,
             checkpoint_db=self.db_path,  # Same path
         )
 

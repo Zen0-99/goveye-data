@@ -24,7 +24,7 @@ SCHEMA_PATH = os.path.join(
 )
 
 
-def make_statement(stmt_id, text="Short statement text.", house=1):
+def make_statement(stmt_id, text="Short statement text.", house="Commons"):
     """Build a minimal written statement fixture as returned by the bulk API."""
     return {
         "id": stmt_id,
