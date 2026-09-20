@@ -56,7 +56,7 @@ PER_API_TABLES = {
     "manifestos_db": ["party_manifestos"],
     "historical_members_db": ["historical_members"],
     "debates_db": ["debate_speeches"],
-    "member_details_db": ["mp_synopsis", "mp_contacts", "mp_experience"],
+    "member_details_db": ["mp_synopsis", "mp_contacts", "mp_experience", "mp_career_events"],
     "hansard_db": ["hansard_contributions"],
     "written_questions_db": ["written_questions"],
     "councils_db": ["councils"],

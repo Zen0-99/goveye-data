@@ -465,56 +465,77 @@ def build_expenses_table(conn):
     conn.commit()
 
 
+# expenses.id is AUTOINCREMENT, so delete+reinsert re-keys every row each run —
+# churning ids and turning every patch into a full-table dump. IPSA republishes
+# the CSV in full each cycle, so claimNumber is a stable natural key: reuse the
+# existing id for each claim, update changed rows in place, insert new claims
+# with fresh ids, and delete ids whose claims vanished from the CSV.
+EXPENSE_CONTENT_COLS = [
+    "mpId", "category", "bucket", "amountPence", "claimDate", "status",
+    "shortDescription", "details", "claimNumber", "journeyType", "journeyFrom",
+    "journeyTo", "travel", "nights", "mileage", "amountPaidPence",
+    "amountNotPaidPence", "amountRepaidPence", "reasonIfNotPaid",
+    "supplyMonth", "supplyPeriod",
+]
+
+
 def insert_expenses(conn, rows, timestamp_millis):
-    """Batch insert expense rows using INSERT OR REPLACE.
-
-    Phase 13: inserts all descriptive fields.
-    """
+    """Upsert expense rows keyed on claimNumber, keeping ids stable."""
     cursor = conn.cursor()
-    insert_sql = """
-        INSERT OR REPLACE INTO expenses (
-            id, mpId, category, bucket, amountPence, claimDate, status, lastUpdated,
-            shortDescription, details, claimNumber, journeyType, journeyFrom,
-            journeyTo, travel, nights, mileage, amountPaidPence,
-            amountNotPaidPence, amountRepaidPence, reasonIfNotPaid,
-            supplyMonth, supplyPeriod
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """
 
-    tuples = [
-        (
-            None,  # autoGenerate
-            row["mpId"],
-            row["category"],
-            row["bucket"],
-            row["amountPence"],
-            row.get("claimDate"),
-            row.get("status"),
-            timestamp_millis,
-            row.get("shortDescription"),
-            row.get("details"),
-            row.get("claimNumber"),
-            row.get("journeyType"),
-            row.get("journeyFrom"),
-            row.get("journeyTo"),
-            row.get("travel"),
-            row.get("nights"),
-            row.get("mileage"),
-            row.get("amountPaidPence"),
-            row.get("amountNotPaidPence"),
-            row.get("amountRepaidPence"),
-            row.get("reasonIfNotPaid"),
-            row.get("supplyMonth"),
-            row.get("supplyPeriod"),
+    existing = {}
+    for r in cursor.execute(
+        f"SELECT id, {', '.join(EXPENSE_CONTENT_COLS)} FROM expenses"
+    ):
+        key = r[9] if r[9] is not None else (r[1], r[5], r[4], r[7])  # claimNumber else (mpId, claimDate, amountPence, shortDescription)
+        existing.setdefault(key, []).append((r[0], r[1:]))
+
+    next_id = (cursor.execute("SELECT COALESCE(MAX(id), 0) FROM expenses").fetchone()[0]) + 1
+    seen_ids = set()
+    updates = []
+    inserts = []
+
+    for row in rows:
+        content = tuple(row.get(c) for c in EXPENSE_CONTENT_COLS)
+        key = row.get("claimNumber") if row.get("claimNumber") is not None else (
+            row["mpId"], row.get("claimDate"), row.get("amountPence"), row.get("shortDescription")
         )
-        for row in rows
-    ]
+        bucket = existing.get(key)
+        if bucket:
+            row_id, old_content = bucket.pop()
+            seen_ids.add(row_id)
+            if old_content != content:
+                updates.append(content + (timestamp_millis, row_id))
+        else:
+            inserts.append((next_id,) + content + (timestamp_millis,))
+            next_id += 1
 
-    for i in range(0, len(tuples), BATCH_SIZE):
-        batch = tuples[i:i + BATCH_SIZE]
-        cursor.executemany(insert_sql, batch)
+    update_sql = (
+        f"UPDATE expenses SET {', '.join(f'{c}=?' for c in EXPENSE_CONTENT_COLS)},"
+        " lastUpdated=? WHERE id=?"
+    )
+    insert_sql = (
+        f"INSERT INTO expenses (id, {', '.join(EXPENSE_CONTENT_COLS)}, lastUpdated)"
+        f" VALUES ({', '.join('?' * (len(EXPENSE_CONTENT_COLS) + 2))})"
+    )
+
+    for i in range(0, len(updates), BATCH_SIZE):
+        cursor.executemany(update_sql, updates[i:i + BATCH_SIZE])
         conn.commit()
-        logger.info("Inserted expenses: %d/%d", min(i + BATCH_SIZE, len(tuples)), len(tuples))
+    for i in range(0, len(inserts), BATCH_SIZE):
+        cursor.executemany(insert_sql, inserts[i:i + BATCH_SIZE])
+        conn.commit()
+        logger.info("Inserted expenses: %d/%d", min(i + BATCH_SIZE, len(inserts)), len(inserts))
+
+    stale_ids = [rid for ids in existing.values() for rid, _ in ids if rid not in seen_ids]
+    for i in range(0, len(stale_ids), BATCH_SIZE):
+        cursor.executemany("DELETE FROM expenses WHERE id=?", [(rid,) for rid in stale_ids[i:i + BATCH_SIZE]])
+        conn.commit()
+
+    logger.info(
+        "Expenses upsert: %d updated, %d inserted, %d deleted",
+        len(updates), len(inserts), len(stale_ids),
+    )
 
 
 # --- Build modes ---
@@ -564,10 +585,8 @@ def build_delta(output_path, previous_db, schema_path, mps_db):
     expenses = parse_ipsa_csv(csv_text, name_lookup)
 
     if expenses:
-        # Clear old data and re-insert (expenses are republished in full each cycle)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM expenses")
-        conn.commit()
+        # IPSA republishes the CSV in full each cycle — upsert keyed on
+        # claimNumber keeps ids stable and deletes claims that vanished.
         insert_expenses(conn, expenses, timestamp_millis)
 
     logger.info("VACUUMing database to minimize file size...")

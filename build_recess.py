@@ -128,19 +128,39 @@ def parse_date(text):
 
 
 def insert_recess_dates(conn, house_id, recess_dates, timestamp_millis):
-    """Insert recess dates for a house into recess_dates."""
-    cursor = conn.cursor()
-    insert_sql = """
-        INSERT OR REPLACE INTO recess_dates
-            (house, description, startDate, endDate)
-        VALUES (?, ?, ?, ?)
+    """Upsert recess dates for a house, keyed on (description, startDate).
+
+    recess_dates.id is AUTOINCREMENT — delete+reinsert re-keys every row each
+    run and turns every patch into a full-table dump. Reuse existing ids,
+    update endDate in place, and delete ids whose rows vanished upstream.
     """
-    rows = [(house_id, desc, start, end) for (desc, start, end) in recess_dates]
-    for i in range(0, len(rows), 100):
-        batch = rows[i:i + 100]
-        cursor.executemany(insert_sql, batch)
-        conn.commit()
-    logger.info("House %d: %d recess dates inserted", house_id, len(rows))
+    cursor = conn.cursor()
+    existing = {}
+    for rid, desc, start, end in cursor.execute(
+        "SELECT id, description, startDate, endDate FROM recess_dates WHERE house = ?",
+        (house_id,),
+    ):
+        existing.setdefault((desc, start), []).append((rid, end))
+
+    next_id = cursor.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM recess_dates").fetchone()[0]
+    for desc, start, end in recess_dates:
+        bucket = existing.get((desc, start))
+        if bucket:
+            rid, old_end = bucket.pop()
+            if old_end != end:
+                cursor.execute("UPDATE recess_dates SET endDate = ? WHERE id = ?", (end, rid))
+        else:
+            cursor.execute(
+                "INSERT INTO recess_dates (id, house, description, startDate, endDate)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (next_id, house_id, desc, start, end),
+            )
+            next_id += 1
+
+    stale = [rid for ids in existing.values() for rid, _ in ids]
+    cursor.executemany("DELETE FROM recess_dates WHERE id = ?", [(rid,) for rid in stale])
+    conn.commit()
+    logger.info("House %d: %d recess dates upserted, %d deleted", house_id, len(recess_dates), len(stale))
 
 
 def update_recess_meta(conn, house_id, timestamp_millis):
@@ -162,6 +182,11 @@ def fetch_and_insert_recess(conn, timestamp_millis):
         try:
             html = fetch_recess_html(house_id)
             recess_dates = parse_recess_dates(html)
+            if not recess_dates:
+                # Empty parse means the page format changed, not that the
+                # house has no recesses — keep stored rows rather than wiping.
+                logger.warning("House %d: parsed 0 recess dates, keeping stored rows", house_id)
+                continue
             insert_recess_dates(conn, house_id, recess_dates, timestamp_millis)
             update_recess_meta(conn, house_id, timestamp_millis)
         except Exception as e:
@@ -182,10 +207,7 @@ def build_seed(output_path, schema_path, checkpoint_db=None):
         if os.path.abspath(checkpoint_db) != os.path.abspath(output_path):
             shutil.copy2(checkpoint_db, output_path)
         conn = sqlite3.connect(output_path)
-        # Clear old data and re-fetch (recess dates can change)
-        conn.execute("DELETE FROM recess_dates")
-        conn.commit()
-        logger.info("Resuming from checkpoint: cleared old recess dates, re-fetching")
+        logger.info("Resuming from checkpoint: upserting fresh recess dates")
     else:
         conn = schema_module.create_database_with_tables(
             output_path, schema_path, TABLE_NAMES,
@@ -212,10 +234,6 @@ def build_delta(output_path, previous_db, schema_path):
     logger.info("Copied previous DB to %s", output_path)
 
     conn = sqlite3.connect(output_path)
-
-    # Delete existing recess dates (small dataset, can change)
-    conn.execute("DELETE FROM recess_dates")
-    conn.commit()
 
     fetch_and_insert_recess(conn, timestamp_millis)
 
