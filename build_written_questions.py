@@ -375,7 +375,7 @@ def get_processed_question_ids(conn):
 
 
 def build_seed(output_path, schema_path, mps_db, mp_limit=None,
-               checkpoint_db=None, max_full_text=None):
+               checkpoint_db=None, max_full_text=None, workers=10):
     """Seed mode: create fresh DB, fetch all questions, filter to MPs, insert.
 
     If checkpoint_db exists and has data, upserts on top of it (INSERT OR
@@ -406,7 +406,7 @@ def build_seed(output_path, schema_path, mps_db, mp_limit=None,
             # full-text fetching for remaining truncated questions
             logger.info("Checkpoint has %d questions — skipping API fetch, "
                         "continuing full-text fetching", row_count)
-            return _fetch_full_text_batch(conn, max_full_text)
+            return _fetch_full_text_batch(conn, max_full_text, workers)
     else:
         conn = schema_module.create_database_with_tables(
             output_path, schema_path, TABLE_NAMES,
@@ -432,7 +432,7 @@ def build_seed(output_path, schema_path, mps_db, mp_limit=None,
         logger.info("Saved %d questions to DB (truncated text pending for some)", len(filtered))
 
     # Full-text fetching (possibly batched)
-    more_work = _fetch_full_text_batch(conn, max_full_text)
+    more_work = _fetch_full_text_batch(conn, max_full_text, workers)
 
     logger.info("VACUUMing database to minimize file size...")
     conn.execute("VACUUM")
@@ -442,7 +442,7 @@ def build_seed(output_path, schema_path, mps_db, mp_limit=None,
     return more_work
 
 
-def _fetch_full_text_batch(conn, max_full_text=None):
+def _fetch_full_text_batch(conn, max_full_text=None, workers=10):
     """Fetch full text for truncated questions, optionally batched.
 
     If max_full_text is set, processes at most that many truncated questions
@@ -464,8 +464,8 @@ def _fetch_full_text_batch(conn, max_full_text=None):
         "ORDER BY id"
     )
     truncated_ids = [row[0] for row in cursor.fetchall()]
-    logger.info("Fetching full text for %d truncated questions (parallel, 10 workers)",
-                len(truncated_ids))
+    logger.info("Fetching full text for %d truncated questions (parallel, %d workers)",
+                len(truncated_ids), workers)
 
     if not truncated_ids:
         return False
@@ -483,7 +483,7 @@ def _fetch_full_text_batch(conn, max_full_text=None):
     update_q_sql = "UPDATE written_questions SET questionText = ? WHERE id = ?"
     update_a_sql = "UPDATE written_questions SET answerText = ? WHERE id = ?"
     done_count = 0
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_id = {
             executor.submit(fetch_full_question_text, qid): qid
             for qid in batch
@@ -517,7 +517,7 @@ def _fetch_full_text_batch(conn, max_full_text=None):
 
 
 def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None,
-                max_full_text=None):
+                max_full_text=None, workers=10):
     """Delta mode: copy previous DB, re-fetch all questions, filter, upsert."""
     timestamp_millis = int(time.time() * 1000)
 
@@ -602,14 +602,14 @@ def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None,
     if max_full_text is not None and max_full_text > 0:
         truncated = truncated[:max_full_text]
     logger.info(
-        "Fetching full text for %d truncated questions (parallel, 10 workers; "
-        "%d total remaining)", len(truncated), total_truncated,
+        "Fetching full text for %d truncated questions (parallel, %d workers; "
+        "%d total remaining)", len(truncated), workers, total_truncated,
     )
 
     update_q_sql = "UPDATE written_questions SET questionText = ? WHERE id = ?"
     update_a_sql = "UPDATE written_questions SET answerText = ? WHERE id = ?"
     done_count = 0
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_q = {
             executor.submit(fetch_full_question_text, q["id"]): q
             for q in truncated
@@ -675,6 +675,10 @@ def main():
         help="Path to a checkpoint DB to resume from (seed mode only). Upserts on top of existing data.",
     )
     parser.add_argument(
+        "--workers", type=int, default=10,
+        help="Parallel workers for full-text fetching. Default: 10.",
+    )
+    parser.add_argument(
         "--max-full-text", type=int, default=None,
         help="Maximum number of truncated questions to fetch full text for per run. "
              "In seed mode, reaching the limit exits with code 2 for the CI batch "
@@ -689,13 +693,13 @@ def main():
         import sys
         more_work = build_seed(args.output, args.schema, args.mps_db,
                                mp_limit=args.mp_limit, checkpoint_db=args.checkpoint_db,
-                               max_full_text=args.max_full_text)
+                               max_full_text=args.max_full_text, workers=args.workers)
         if more_work:
             logger.info("More full-text work remains — exiting with code 2 for CI chain")
             sys.exit(2)
     else:
         build_delta(args.output, args.previous_db, args.schema, args.mps_db,
-                    mp_limit=args.mp_limit, max_full_text=args.max_full_text)
+                    mp_limit=args.mp_limit, max_full_text=args.max_full_text, workers=args.workers)
 
 
 if __name__ == "__main__":
