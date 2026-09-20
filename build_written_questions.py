@@ -75,7 +75,7 @@ def fetch_full_question_text(question_id):
             r = api_get(f"{QUESTIONS_API}/{question_id}", timeout=30)
             data = r.json()
             val = data.get("value", data)
-            return val.get("text", ""), val.get("answerText", "")
+            return val.get("questionText", ""), val.get("answerText", "")
         except Exception as e:
             if "429" in str(e) and attempt < max_retries - 1:
                 wait = 2 ** (attempt + 1)  # 2s, 4s, 8s
