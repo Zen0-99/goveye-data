@@ -414,20 +414,32 @@ def apply_synopses(details_db_path, extracts):
     logger.info("mp_synopsis: %d Wikipedia extracts applied", updated)
 
 
-def apply_links(links_db_path, sitelinks):
-    """Fill/update mp_links.wikipediaUrl from enwiki sitelinks."""
+def apply_links(links_db_path, sitelinks, timestamp_millis):
+    """Fill/update mp_links.wikipediaUrl from enwiki sitelinks.
+
+    INSERTs a row when the MP has no mp_links row at all — a bare
+    UPDATE would silently skip them (~412 current MPs have none).
+    """
     conn = sqlite3.connect(links_db_path)
-    updated = 0
+    updated = inserted = 0
     for mp_id, title in sitelinks.items():
         url = f"https://en.wikipedia.org/wiki/{urllib.parse.quote(title.replace(' ', '_'))}"
         cur = conn.execute(
             "UPDATE mp_links SET wikipediaUrl = ? WHERE mpId = ? AND (wikipediaUrl IS NULL OR wikipediaUrl != ?)",
             (url, mp_id, url),
         )
-        updated += cur.rowcount
+        if cur.rowcount:
+            updated += cur.rowcount
+            continue
+        if not conn.execute("SELECT 1 FROM mp_links WHERE mpId = ?", (mp_id,)).fetchone():
+            conn.execute(
+                "INSERT INTO mp_links (mpId, wikipediaUrl, lastUpdated) VALUES (?, ?, ?)",
+                (mp_id, url, timestamp_millis),
+            )
+            inserted += 1
     conn.commit()
     conn.close()
-    logger.info("mp_links: %d wikipediaUrls applied", updated)
+    logger.info("mp_links: %d wikipediaUrls updated, %d rows inserted", updated, inserted)
 
 
 def apply_career_events(career_db_path, statements, qid_map, timestamp_millis):
@@ -558,7 +570,7 @@ def main():
     if args.synopsis_db:
         apply_synopses(args.synopsis_db, extracts)
     if args.links_db:
-        apply_links(args.links_db, sitelinks)
+        apply_links(args.links_db, sitelinks, timestamp_millis)
 
     logger.info("Done")
 
