@@ -6,7 +6,8 @@ parliament.uk member ID — exact, no name guessing) and applies every
 Wikipedia/Wikidata enrichment to the owning per-API DB:
 
     --bio-db PATH       fill bio_data.dateOfBirth where NULL
-                        (Wikidata P569 first, intro-extract regex fallback)
+                        (Wikidata P569, then intro-extract regex, then
+                        wikitext infobox {{birth date}} templates)
     --synopsis-db PATH  replace mp_synopsis.synopsisText with the Wikipedia
                         intro extract (richer than the MNIS synopsis)
     --links-db PATH     fill/update mp_links.wikipediaUrl from the enwiki
@@ -286,6 +287,54 @@ def fetch_wikipedia_extracts(titles):
     return result
 
 
+def fetch_wikipedia_wikitext(titles):
+    """Fetch raw wikitext for a batch of exact Wikipedia titles.
+
+    Returns {input_title: wikitext str | None}. Used as a DOB fallback —
+    infobox {{birth date}} templates carry dates that intro extracts omit.
+    """
+    if not titles:
+        return {}
+    params = urllib.parse.urlencode({
+        "action": "query",
+        "titles": "|".join(titles),
+        "prop": "revisions",
+        "rvprop": "content",
+        "rvslots": "main",
+        "format": "json",
+        "formatversion": "2",
+        "redirects": "1",
+    })
+    req = urllib.request.Request(f"{WIKIPEDIA_API}?{params}", headers={
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+    except Exception as e:
+        logger.error("Wikipedia API error: %s", e)
+        return {}
+
+    redirects = {r["from"]: r["to"] for r in data.get("query", {}).get("redirects", [])}
+    normalized = {n["from"]: n["to"] for n in data.get("query", {}).get("normalized", [])}
+    title_to_page = {p.get("title", ""): p for p in data.get("query", {}).get("pages", [])}
+
+    result = {}
+    for original in titles:
+        resolved = redirects.get(normalized.get(original, original), normalized.get(original, original))
+        page = title_to_page.get(resolved)
+        if page is None or "missing" in page:
+            result[original] = None
+            continue
+        revisions = page.get("revisions") or []
+        content = ""
+        if revisions:
+            content = (revisions[0].get("slots", {}).get("main") or {}).get("content", "")
+        result[original] = content
+    return result
+
+
 _MONTHS = {
     "january": 1, "february": 2, "march": 3, "april": 4,
     "may": 5, "june": 6, "july": 7, "august": 8,
@@ -310,6 +359,41 @@ def extract_dob_from_text(text: str):
     if year_i < 1930 or year_i > 2008:
         return None
     return f"{year_i:04d}-{month:02d}-{int(day):02d}"
+
+
+# {{birth date and age|1953|9|27}}, {{Birth date|df=y|1953|9|27}},
+# {{bda|1953|9|27}} and friends — named params (df=y) may precede the date.
+_WIKI_BIRTH_TEMPLATE_RE = re.compile(
+    r"\{\{\s*(?:[Bb]irth[ _-]?date(?:[ _]and[ _]age)?|bda|Bda|"
+    r"[Bb]irth[ _]date[ _]based[ _]on[ _]age)\s*\|"
+    r"(?:[^}|\d][^}|]*\|)*?"
+    r"(\d{4})\s*\|\s*(\d{1,2})\s*\|\s*(\d{1,2})\s*[\|}]"
+)
+# |birth_date = 27 September 1953 (free-text variant)
+_WIKI_BIRTH_FREETEXT_RE = re.compile(
+    r"birth[ _]?date\s*=\s*(?:\{\{[^}]*\}\}\s*)?(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})",
+    re.IGNORECASE,
+)
+
+
+def extract_dob_from_wikitext(wikitext: str):
+    """Extract a birth date from page wikitext (infobox fallback for P569
+    and intro-extract regex). Returns 'YYYY-MM-DD' or None."""
+    if not wikitext:
+        return None
+    m = _WIKI_BIRTH_TEMPLATE_RE.search(wikitext)
+    if m:
+        year_i, month_i, day_i = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 1920 <= year_i <= 2008 and 1 <= month_i <= 12 and 1 <= day_i <= 31:
+            return f"{year_i:04d}-{month_i:02d}-{day_i:02d}"
+        return None
+    m = _WIKI_BIRTH_FREETEXT_RE.search(wikitext)
+    if m:
+        month = _MONTHS.get(m.group(2).lower())
+        year_i, day_i = int(m.group(3)), int(m.group(1))
+        if month and 1920 <= year_i <= 2008 and 1 <= day_i <= 31:
+            return f"{year_i:04d}-{month:02d}-{day_i:02d}"
+    return None
 
 
 def clean_extract(extract: str):
@@ -373,30 +457,51 @@ def apply_dobs(bio_db_path, mp_data, enrichment, extracts):
         ).fetchall()
     }
     filled_p569 = filled_regex = 0
+    still_missing = []
     for mp_id in missing:
         dob = enrichment.get(mp_id, {}).get("dob")
-        if dob:
-            conn.execute(
-                "UPDATE bio_data SET dateOfBirth = ? WHERE mpId = ? AND (dateOfBirth IS NULL OR dateOfBirth = '')",
-                (dob, mp_id),
-            )
+        if not dob:
+            extract = extracts.get(mp_id, {}).get("extract") if extracts else None
+            dob = extract_dob_from_text(extract) if extract else None
+            if dob:
+                filled_regex += 1
+        else:
             filled_p569 += 1
-            continue
-        extract = extracts.get(mp_id, {}).get("extract") if extracts else None
-        dob = extract_dob_from_text(extract) if extract else None
         if dob:
             conn.execute(
                 "UPDATE bio_data SET dateOfBirth = ? WHERE mpId = ? AND (dateOfBirth IS NULL OR dateOfBirth = '')",
                 (dob, mp_id),
             )
-            filled_regex += 1
+        else:
+            still_missing.append(mp_id)
+
+    # Third fallback: wikitext infobox {{birth date}} templates carry dates
+    # that neither P569 nor the intro-extract regex reach.
+    filled_wikitext = 0
+    title_to_mp = {
+        enrichment[mp_id]["title"]: mp_id
+        for mp_id in still_missing
+        if enrichment.get(mp_id, {}).get("title")
+    }
+    titles = list(title_to_mp)
+    for i in range(0, len(titles), 20):
+        wikitexts = fetch_wikipedia_wikitext(titles[i:i + 20])
+        for title, text in wikitexts.items():
+            dob = extract_dob_from_wikitext(text) if text else None
+            if dob:
+                conn.execute(
+                    "UPDATE bio_data SET dateOfBirth = ? WHERE mpId = ? AND (dateOfBirth IS NULL OR dateOfBirth = '')",
+                    (dob, title_to_mp[title]),
+                )
+                filled_wikitext += 1
+        time.sleep(0.5)
     conn.commit()
     remaining = conn.execute(
         "SELECT COUNT(*) FROM bio_data WHERE dateOfBirth IS NULL OR dateOfBirth = ''"
     ).fetchone()[0]
     conn.close()
-    logger.info("bio_data DOBs: %d via P569, %d via extract regex, %d still missing",
-                filled_p569, filled_regex, remaining)
+    logger.info("bio_data DOBs: %d via P569, %d via extract regex, %d via wikitext, %d still missing",
+                filled_p569, filled_regex, filled_wikitext, remaining)
 
 
 def apply_synopses(details_db_path, extracts):
