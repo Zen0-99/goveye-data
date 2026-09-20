@@ -38,7 +38,7 @@ TABLE_NAMES = ["hansard_contributions"]
 
 # --- Hansard API ---
 
-def fetch_member_counts(member_id, timeout=30, max_retries=3):
+def fetch_member_counts(member_id, timeout=90, max_retries=3):
     """Fetch contribution counts for a single MP from the Hansard API.
 
     Returns (total_contributions, total_written_answers), or None if the
@@ -92,6 +92,8 @@ def fetch_all_counts(mps, skip_ids=None):
     retries blew the 60-minute workflow timeout four weeks running.
     4 workers keep wall-clock bounded without hammering the API
     (8 workers appeared to trigger throttling — every call timed out).
+    The 90s per-request timeout tolerates the API's slow-but-successful
+    responses (20-30s observed on degraded days).
 
     Returns (counts, failed) where counts is a list of
     (member_id, member_name, total_written_answers, total_contributions)
