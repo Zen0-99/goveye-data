@@ -46,7 +46,8 @@ Each `build_*.py` script fetches from one Parliament API and writes a per-API SQ
 | `build_mnis.py` | mps.db (enrichment) | mps (additional columns) | MNIS API |
 | `build_hansard.py` | hansard.db | hansard_contributions | Hansard API |
 | `build_debates.py` | debates.db | debate_speeches | Hansard API |
-| `build_member_details.py` | member_details.db | mp_synopsis, mp_contacts, mp_experience | Members API |
+| `build_member_details.py` | member_details.db | mp_synopsis, mp_contacts, mp_experience, mp_career_events | Members API |
+| `build_wikipedia.py` | (enrichment) | bio_data.dateOfBirth, mp_synopsis, mp_links.wikipediaUrl, mp_career_events | Wikipedia + Wikidata |
 | `build_party_stats.py` | party_stats.db | party_stats | Computed from divisions |
 | `build_bio_data.py` | bio_data.db | bio_data | Members API |
 | `build_manifestos.py` | manifestos.db | party_manifestos | TheyWorkForYou |
@@ -94,12 +95,18 @@ Any data that lives in `goveye.db` must be produced by a `build_*.py` script
 that owns a per-API DB — otherwise it can't reach devices via patches and
 will be silently lost on the next seed rebuild.
 
-- **Good**: Wikipedia DOBs live in `bio_data.db` via `build_mnis.py` +
-  `build_wikipedia_bios.py --dob-only` in `update-bio-data.yml`. Future
-  bio-data patches carry them.
+- **Good**: Wikipedia/Wikidata enrichment lives in the owning per-API DBs via
+  `build_wikipedia.py` — `--bio-db` fills `bio_data.dateOfBirth` (Wikidata
+  P569, extract regex fallback) in `update-bio-data.yml`; `--synopsis-db` +
+  `--career-db` enrich `member_details.db` in `update-member-details.yml`
+  (Wikipedia intro extracts → `mp_synopsis`, P69/P106 → `mp_career_events`
+  with `source='wikipedia'`); `--links-db` fills `mp_links.wikipediaUrl` in
+  `update-mp-links.yml`. Patches carry all of it.
 - **Bad**: writing enrichment only into the merged `goveye.db` during
   build-seed — the data never lands in a per-API DB, so no patch carries it
-  and devices that update incrementally never see it.
+  and devices that update incrementally never see it. (The build-seed
+  `build_wikipedia.py` step is a backstop on already-merged data only — it
+  must not write `mp_career_events`, whose ids are allocated per source DB.)
 
 When adding a new data layer (new table, new enrichment):
 1. Give it a `build_*.py` that writes a per-API DB (or enriches an existing one).
@@ -125,10 +132,10 @@ have hit 445MB. Avoid:
 - **Delete+reinsert on AUTOINCREMENT tables.** Re-keying every row churns
   ids → full-table patch. Match existing rows by natural key and UPDATE in
   place (see `build_member_details.insert_career_events`).
-- **Two per-API DBs sharing one AUTOINCREMENT table.** Each autoincrements
+- **Two writers sharing one AUTOINCREMENT table.** Each autoincrements
   from 1 and merge's `INSERT OR REPLACE` clobbers one source with the
   other. Partition the id space per source (`WIKIPEDIA_ID_BASE` in
-  `build_member_details.py` / `build_wikipedia_career.py`).
+  `build_member_details.py` / `build_wikipedia.py`).
 - **`lastUpdated`-only diffs.** `diff_db.py` excludes `lastUpdated` from
   row comparison — stamp it freely, it won't trigger an upsert by itself.
 - **BLOB columns** serialize to signed-byte JSON arrays automatically in

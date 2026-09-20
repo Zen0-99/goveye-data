@@ -80,6 +80,16 @@ jobs:
         run: |
           python build_member_details.py --output member_details.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_member_details.db --mps-db mps.db
 
+      - name: Enrich from Wikipedia/Wikidata (synopsis + career events)
+        if: success()
+        run: |
+          # Richer Wikipedia intro extracts replace the thin MNIS synopsis;
+          # Wikidata education (P69)/occupation (P106) become mp_career_events
+          # rows with source='wikipedia' (ids >= 1e9, no clash with parliament
+          # rows). Landing them in member_details.db means the weekly patch
+          # carries them and merge_dbs.py picks them up for the seed.
+          python build_wikipedia.py --mps-db mps.db --synopsis-db member_details.db --career-db member_details.db
+
       - name: Save seed checkpoint
         if: steps.download_prev.outputs.has_previous != 'true' && always()
         uses: actions/cache@v4

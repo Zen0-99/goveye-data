@@ -270,8 +270,8 @@ def insert_bio_data(conn, rows, timestamp_millis):
     """Batch insert bio_data rows.
 
     Uses UPSERT rather than INSERT OR REPLACE so a NULL dateOfBirth from MNIS
-    never clobbers a DOB previously filled by build_wikipedia_bios.py
-    (--dob-only) — if the Wikipedia step fails or is skipped in a workflow,
+    never clobbers a DOB previously filled by build_wikipedia.py
+    (--bio-db) — if the Wikipedia step fails or is skipped in a workflow,
     enriched DOBs would otherwise be silently lost.
     """
     cursor = conn.cursor()

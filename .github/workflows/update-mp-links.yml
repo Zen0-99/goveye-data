@@ -67,6 +67,13 @@ jobs:
         run: |
           python build_parlparse.py --output mp_links.db --schema schemas/bundled_schema.json --mode delta --previous-db prev_mp_links.db --mps-db mps.db
 
+      - name: Fill Wikipedia URLs from Wikidata sitelinks
+        if: success()
+        run: |
+          # build_parlparse.py hardcodes wikipediaUrl=None — fill it from the
+          # MP's Wikidata enwiki sitelink (exact, no title guessing).
+          python build_wikipedia.py --mps-db mps.db --links-db mp_links.db
+
       - name: Save seed checkpoint
         if: steps.download_prev.outputs.has_previous != 'true' && always()
         uses: actions/cache@v4

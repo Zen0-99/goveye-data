@@ -288,12 +288,11 @@ def insert_experience(conn, rows):
         conn.commit()
 
 
-# mp_career_events.id is AUTOINCREMENT and the table is shared in the merged
-# seed between this DB (source='parliament') and wikipedia_career.db
-# (source='wikipedia'). Both per-API DBs autoincrement from 1, so merge_dbs.py's
-# INSERT OR REPLACE used to have each source silently clobber the other's rows
-# for colliding ids — losing career data on every seed build. Parliament rows
-# allocate ids below WIKIPEDIA_ID_BASE; wikipedia rows allocate above it.
+# mp_career_events.id is AUTOINCREMENT and the table is shared in this DB
+# between parliament rows (source='parliament', ids < WIKIPEDIA_ID_BASE) and
+# wikipedia rows (source='wikipedia', ids >= WIKIPEDIA_ID_BASE, written by
+# build_wikipedia.py as a workflow enrichment step). The id partition keeps
+# merge_dbs.py's INSERT OR REPLACE from clobbering one source with the other.
 WIKIPEDIA_ID_BASE = 1_000_000_000
 
 

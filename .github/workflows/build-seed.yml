@@ -335,10 +335,16 @@ jobs:
         run: |
           python build_source_recs.py --output goveye.db --schema schemas/bundled_schema.json
 
-      - name: Enrich with Wikipedia bios (post-merge)
+      - name: Enrich with Wikipedia data (post-merge backstop)
         if: steps.check.outputs.needs_update == 'true' && success()
         run: |
-          python build_wikipedia_bios.py --mps-db per-api-cache/mps.db --goveye-db goveye.db --inplace
+          # Backstop only — the per-API update workflows already enrich
+          # bio_data.db / member_details.db / mp_links.db, and merge carries
+          # it. These are mpId-keyed UPDATEs so re-applying on the merged DB
+          # is safe. mp_career_events is deliberately NOT enriched here: its
+          # ids are allocated per source DB, so wikipedia rows must come from
+          # member_details.db via merge or they'd duplicate.
+          python build_wikipedia.py --mps-db per-api-cache/mps.db --bio-db goveye.db --synopsis-db goveye.db --links-db goveye.db
 
       - name: Drop build-time temp tables (D-03 — body text not shipped)
         if: steps.check.outputs.needs_update == 'true'
