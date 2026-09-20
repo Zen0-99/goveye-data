@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
   "database": {
-    "version": 35,
-    "identityHash": "a71fe6417839101ec92a8f27145043b8",
+    "version": 36,
+    "identityHash": "4c822fa540f82eb58496ea19e87a41a9",
     "entities": [
       {
         "tableName": "mps",
@@ -2700,11 +2700,191 @@
             "organisationSlug"
           ]
         }
+      },
+      {
+        "tableName": "mp_officer_identity",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`mpId` INTEGER NOT NULL, `officerId` TEXT NOT NULL, `officerName` TEXT NOT NULL, `dobMonth` INTEGER, `dobYear` INTEGER, `nationality` TEXT, `countryOfResidence` TEXT, `matchMethod` TEXT, `matchConfidence` REAL, `isDisqualified` INTEGER NOT NULL, `disqualificationJson` TEXT, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`mpId`))",
+        "fields": [
+          {
+            "fieldPath": "mpId",
+            "columnName": "mpId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "officerId",
+            "columnName": "officerId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "officerName",
+            "columnName": "officerName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dobMonth",
+            "columnName": "dobMonth",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "dobYear",
+            "columnName": "dobYear",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "nationality",
+            "columnName": "nationality",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "countryOfResidence",
+            "columnName": "countryOfResidence",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "matchMethod",
+            "columnName": "matchMethod",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "matchConfidence",
+            "columnName": "matchConfidence",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "isDisqualified",
+            "columnName": "isDisqualified",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "disqualificationJson",
+            "columnName": "disqualificationJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastUpdated",
+            "columnName": "lastUpdated",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "mpId"
+          ]
+        }
+      },
+      {
+        "tableName": "mp_appointments",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`mpId` INTEGER NOT NULL, `companyNumber` TEXT NOT NULL, `officerRole` TEXT NOT NULL, `appointedOn` TEXT NOT NULL, `officerId` TEXT, `companyName` TEXT NOT NULL, `resignedOn` TEXT, `isCurrent` INTEGER NOT NULL, `companyStatus` TEXT, `companyType` TEXT, `companySicCodes` TEXT, `companyIncorporated` TEXT, `pscNatures` TEXT, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`mpId`, `companyNumber`, `officerRole`, `appointedOn`))",
+        "fields": [
+          {
+            "fieldPath": "mpId",
+            "columnName": "mpId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "companyNumber",
+            "columnName": "companyNumber",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "officerRole",
+            "columnName": "officerRole",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "appointedOn",
+            "columnName": "appointedOn",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "officerId",
+            "columnName": "officerId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "companyName",
+            "columnName": "companyName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "resignedOn",
+            "columnName": "resignedOn",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isCurrent",
+            "columnName": "isCurrent",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "companyStatus",
+            "columnName": "companyStatus",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "companyType",
+            "columnName": "companyType",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "companySicCodes",
+            "columnName": "companySicCodes",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "companyIncorporated",
+            "columnName": "companyIncorporated",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pscNatures",
+            "columnName": "pscNatures",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastUpdated",
+            "columnName": "lastUpdated",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "mpId",
+            "companyNumber",
+            "officerRole",
+            "appointedOn"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_mp_appointments_mpId",
+            "unique": false,
+            "columnNames": [
+              "mpId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_mp_appointments_mpId` ON `${TABLE_NAME}` (`mpId`)"
+          }
+        ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'a71fe6417839101ec92a8f27145043b8')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '4c822fa540f82eb58496ea19e87a41a9')"
     ]
   }
 }

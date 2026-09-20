@@ -76,6 +76,23 @@ jobs:
           # fallback — fills NULLs only, never overwrites an MNIS-derived DOB.
           python build_wikipedia.py --mps-db mps.db --bio-db bio_data.db
 
+      - name: Fill remaining DOB gaps from Companies House (month/year)
+        if: success()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Companies House only exposes month+year of birth — fills NULLs
+          # still left after Wikidata/Wikipedia with "YYYY-MM" partial dates.
+          # Runs after the Wikipedia step so full dates always win.
+          gh release download companies-house-latest \
+            --pattern companies_house.db --output companies_house.db \
+            || echo "No companies_house.db yet — skipping CH DOB backfill"
+          if [ -f companies_house.db ]; then
+            python build_companies_house.py --mode dob-backfill \
+              --previous-db companies_house.db --bio-db bio_data.db
+          fi
+
       - name: Save seed checkpoint
         if: steps.download_prev.outputs.has_previous != 'true' && always()
         uses: actions/cache@v4

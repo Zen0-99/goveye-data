@@ -63,6 +63,7 @@ PER_API_TABLES = {
     "gov_publications_db": ["government_publications", "_publication_bodies"],
     "written_statements_db": ["written_statements"],
     "legislation_db": ["legislation"],
+    "companies_house_db": ["mp_officer_identity", "mp_appointments"],
 }
 
 
@@ -73,7 +74,8 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
               manifestos_db=None, historical_members_db=None, debates_db=None,
               member_details_db=None, hansard_db=None, councils_db=None,
               gov_publications_db=None, written_statements_db=None,
-              legislation_db=None, written_questions_db=None):
+              legislation_db=None, written_questions_db=None,
+              companies_house_db=None):
     """Merge per-API DBs into a single goveye.db.
 
     Always creates a fresh goveye.db with all tables from the schema.
@@ -162,6 +164,7 @@ def merge_dbs(output_path, schema_path, mps_db=None, commons_votes_db=None,
         "written_statements_db": written_statements_db,
         "legislation_db": legislation_db,
         "written_questions_db": written_questions_db,
+        "companies_house_db": companies_house_db,
     }
 
     for arg_name, db_path in source_dbs.items():
@@ -300,6 +303,7 @@ def main():
     parser.add_argument("--written-statements-db", default=None, help="Path to written_statements.db")
     parser.add_argument("--legislation-db", default=None, help="Path to legislation.db")
     parser.add_argument("--written-questions-db", default=None, help="Path to written_questions.db")
+    parser.add_argument("--companies-house-db", default=None, help="Path to companies_house.db")
 
     args = parser.parse_args()
 
@@ -326,6 +330,7 @@ def main():
         written_statements_db=args.written_statements_db,
         legislation_db=args.legislation_db,
         written_questions_db=args.written_questions_db,
+        companies_house_db=args.companies_house_db,
     )
 
 

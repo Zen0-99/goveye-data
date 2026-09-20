@@ -66,6 +66,7 @@ PER_API = [
     ("written_statements", "written-statements-manifest"),
     ("written_questions", "written-questions-manifest"),
     ("legislation", "legislation-manifest"),
+    ("companies_house", "companies-house-manifest"),
 ]
 
 
@@ -183,6 +184,7 @@ def main():
     parser.add_argument("--written-statements-manifest", default=None)
     parser.add_argument("--written-questions-manifest", default=None)
     parser.add_argument("--legislation-manifest", default=None)
+    parser.add_argument("--companies-house-manifest", default=None)
     parser.add_argument("--previous-seed-manifest", default=None,
                         help="Path to previous seed-manifest.json for version increment.")
     args = parser.parse_args()
@@ -208,6 +210,7 @@ def main():
         "written_statements": args.written_statements_manifest,
         "written_questions": args.written_questions_manifest,
         "legislation": args.legislation_manifest,
+        "companies_house": args.companies_house_manifest,
     }
 
     generate_seed_manifest(
