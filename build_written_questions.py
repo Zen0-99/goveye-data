@@ -307,6 +307,32 @@ def map_question_to_entity(q, timestamp_millis):
     )
 
 
+# Bookkeeping table (pipeline-only — not merged into goveye.db, not diffed):
+# ids whose boundary-length text was fetched from the detail endpoint and
+# confirmed to be genuinely that length. Without it, the ~1.5k questions
+# that are legitimately 255/258 chars get re-fetched every run forever.
+VERIFIED_TABLE = "_wq_fulltext_verified"
+
+
+def _ensure_verified_table(conn):
+    conn.execute(
+        f"CREATE TABLE IF NOT EXISTS {VERIFIED_TABLE} ("
+        "id INTEGER PRIMARY KEY, verifiedAt INTEGER NOT NULL)"
+    )
+
+
+def _get_verified_ids(conn):
+    _ensure_verified_table(conn)
+    return {row[0] for row in conn.execute(f"SELECT id FROM {VERIFIED_TABLE}")}
+
+
+def _mark_verified(conn, qid, timestamp_millis):
+    conn.execute(
+        f"INSERT OR IGNORE INTO {VERIFIED_TABLE} (id, verifiedAt) VALUES (?, ?)",
+        (qid, timestamp_millis),
+    )
+
+
 def insert_questions(conn, questions, timestamp_millis):
     """Insert questions into the written_questions table using batch executemany.
 
@@ -316,8 +342,13 @@ def insert_questions(conn, questions, timestamp_millis):
     (previously-fetched full text), the stored text wins — otherwise every
     delta run would clobber full text with stubs and re-fetch the entire
     corpus.
+
+    Also invalidates _wq_fulltext_verified markers when upstream text has
+    actually changed — a verified row whose stored text no longer matches
+    the incoming text must be re-fetched, not skipped.
     """
     cursor = conn.cursor()
+    _ensure_verified_table(conn)
     insert_sql = """
         INSERT INTO written_questions (
             id, memberId, uin, dateTabled, answeringBodyId,
@@ -360,6 +391,26 @@ def insert_questions(conn, questions, timestamp_millis):
 
     for i in range(0, len(rows), BATCH_SIZE):
         batch = rows[i:i + BATCH_SIZE]
+        ids = [r[0] for r in batch]
+        placeholders = ",".join("?" * len(ids))
+        # Invalidate verified markers when upstream text actually changed
+        stored = {
+            r[0]: (r[1], r[2]) for r in cursor.execute(
+                f"SELECT w.id, w.questionText, w.answerText "
+                f"FROM written_questions w JOIN {VERIFIED_TABLE} v ON v.id = w.id "
+                f"WHERE w.id IN ({placeholders})", ids,
+            ).fetchall()
+        }
+        stale = [
+            r[0] for r in batch
+            if r[0] in stored and stored[r[0]] != (r[6], r[12])
+        ]
+        if stale:
+            cursor.execute(
+                f"DELETE FROM {VERIFIED_TABLE} WHERE id IN "
+                f"({','.join('?' * len(stale))})", stale,
+            )
+            logger.info("Cleared %d stale full-text markers (upstream text changed)", len(stale))
         cursor.executemany(insert_sql, batch)
         conn.commit()
         logger.info("Inserted questions: %d/%d", min(i + BATCH_SIZE, len(rows)), len(rows))
@@ -451,6 +502,7 @@ def _fetch_full_text_batch(conn, max_full_text=None, workers=10):
     On checkpoint resume, queries the DB for questions that still have
     truncated text (len >= 255) and fetches full text for them.
     """
+    timestamp_millis = int(time.time() * 1000)
     # Find truncated questions from the DB (works for both fresh insert and
     # checkpoint resume). The bulk API truncates questionText at exactly 255
     # chars and answerText at exactly 258 (verified against the published
@@ -458,9 +510,11 @@ def _fetch_full_text_batch(conn, max_full_text=None, workers=10):
     # >= 255 would also match already-fetched full text — every batch would
     # re-fetch completed rows and never converge.
     cursor = conn.cursor()
+    _ensure_verified_table(conn)
     cursor.execute(
         "SELECT id FROM written_questions "
-        "WHERE length(questionText) = 255 OR length(answerText) = 258 "
+        "WHERE (length(questionText) = 255 OR length(answerText) = 258) "
+        f"AND id NOT IN (SELECT id FROM {VERIFIED_TABLE}) "
         "ORDER BY id"
     )
     truncated_ids = [row[0] for row in cursor.fetchall()]
@@ -492,6 +546,11 @@ def _fetch_full_text_batch(conn, max_full_text=None, workers=10):
             qid = future_to_id[future]
             try:
                 full_qtext, full_atext = future.result()
+                if full_qtext or full_atext:
+                    # Detail endpoint answered — whatever it returned is the
+                    # true full text (even if still at the boundary length),
+                    # so this row is done.
+                    _mark_verified(conn, qid, timestamp_millis)
                 if full_qtext:
                     conn.execute(update_q_sql, (full_qtext, qid))
                 if full_atext:
@@ -587,9 +646,12 @@ def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None,
             "FROM written_questions"
         ).fetchall()
     }
+    verified_ids = _get_verified_ids(conn)
 
     truncated = []
     for q in filtered:
+        if q["id"] in verified_ids:
+            continue
         sq, sa = stored_lens.get(q["id"], (0, 0))
         q_stub = len(q.get("questionText", "")) >= 255
         a_stub = len(q.get("answerText", "")) >= 255
@@ -618,6 +680,8 @@ def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None,
             q = future_to_q[future]
             try:
                 full_qtext, full_atext = future.result()
+                if full_qtext or full_atext:
+                    _mark_verified(conn, q["id"], timestamp_millis)
                 if full_qtext:
                     q["questionText"] = full_qtext
                     conn.execute(update_q_sql, (full_qtext, q["id"]))
