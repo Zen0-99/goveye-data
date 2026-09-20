@@ -95,14 +95,19 @@ def run_sparql_query(query):
             with urllib.request.urlopen(req, timeout=SPARQL_TIMEOUT) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            if e.code == 429 and attempt < 3:
+            if e.code in (429, 502, 503, 504) and attempt < 3:
                 delay = 10 * (attempt + 1)
-                logger.warning("Wikidata rate-limited (429) — retrying in %ds", delay)
+                logger.warning("Wikidata transient %d — retrying in %ds", e.code, delay)
                 time.sleep(delay)
                 continue
             logger.warning("Wikidata SPARQL query failed: %s", e)
             return None
         except Exception as e:
+            if attempt < 3:
+                delay = 10 * (attempt + 1)
+                logger.warning("Wikidata SPARQL error (%s) — retrying in %ds", e, delay)
+                time.sleep(delay)
+                continue
             logger.warning("Wikidata SPARQL query failed: %s", e)
             return None
     return None
