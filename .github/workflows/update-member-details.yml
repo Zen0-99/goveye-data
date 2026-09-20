@@ -11,7 +11,7 @@ permissions:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # 650 MPs × 3 endpoints × 0.2s delay ≈ 6-7 min
+    timeout-minutes: 50  # 650 MPs × 4 endpoints ≈ 20min + Wikipedia/Wikidata enrichment ≈ 5-10min
 
     steps:
       - uses: actions/checkout@v4
