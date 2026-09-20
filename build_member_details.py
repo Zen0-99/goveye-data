@@ -364,6 +364,7 @@ def insert_career_events(conn, rows):
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             inserts[i:i + BATCH_SIZE])
         conn.commit()
+    conn.commit()  # updates/deletes above must be committed before VACUUM
 
 
 # --- Build ---
