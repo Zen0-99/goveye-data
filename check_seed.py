@@ -82,6 +82,7 @@ PER_API = [
     ("written_statements", "written-statements-manifest", "written_statements"),
     ("legislation", "legislation-manifest", "legislation"),
     ("companies_house", "companies-house-manifest", "companies_house"),
+    ("edms", "edms-manifest", "edms"),
 ]
 
 
@@ -192,6 +193,7 @@ def main():
     parser.add_argument("--written-statements-manifest", default=None)
     parser.add_argument("--legislation-manifest", default=None)
     parser.add_argument("--companies-house-manifest", default=None)
+    parser.add_argument("--edms-manifest", default=None)
     args = parser.parse_args()
 
     per_api_paths = {
@@ -216,6 +218,7 @@ def main():
         "written_statements": args.written_statements_manifest,
         "legislation": args.legislation_manifest,
         "companies_house": args.companies_house_manifest,
+        "edms": args.edms_manifest,
     }
 
     needs_update, changed_apis = check_seed(args.seed_manifest, per_api_paths)

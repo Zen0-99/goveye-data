@@ -55,6 +55,8 @@ TABLE_PRIMARY_KEYS = {
     "historical_members": ["twfyPersonId"],
     "constituency_elections": ["constituencyId", "electionId"],
     "constituency_election_candidates": ["constituencyId", "electionId", "rankOrder"],
+    "early_day_motions": ["edmId"],
+    "edm_sponsors": ["edmId", "memberId"],
 }
 
 

@@ -61,6 +61,7 @@ jobs:
           gh release download written-statements-latest --pattern manifest.json --output written_statements_manifest.json || echo "WARN: written-statements manifest not found"
           gh release download legislation-latest --pattern manifest.json --output legislation_manifest.json || echo "WARN: legislation manifest not found"
           gh release download companies-house-latest --pattern manifest.json --output companies_house_manifest.json || echo "WARN: companies-house manifest not found"
+          gh release download edms-latest --pattern manifest.json --output edms_manifest.json || echo "WARN: edms manifest not found"
 
       - name: Check if seed needs update
         id: check
@@ -87,7 +88,8 @@ jobs:
             --written-statements-manifest written_statements_manifest.json \
             --written-questions-manifest written_questions_manifest.json \
             --legislation-manifest legislation_manifest.json \
-            --companies-house-manifest companies_house_manifest.json >> $GITHUB_OUTPUT
+            --companies-house-manifest companies_house_manifest.json \
+            --edms-manifest edms_manifest.json >> $GITHUB_OUTPUT
 
       # --- Phase 2: Merge (only if data changed) ---
 
@@ -97,7 +99,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: per-api-cache
-          key: per-api-dbs-${{ hashFiles('mps_manifest.json', 'commons_manifest.json', 'lords_manifest.json', 'bills_manifest.json', 'committees_manifest.json', 'recess_manifest.json', 'interests_manifest.json', 'party_stats_manifest.json', 'bio_data_manifest.json', 'expenses_manifest.json', 'mp_links_manifest.json', 'manifestos_manifest.json', 'historical_members_manifest.json', 'debates_manifest.json', 'member_details_manifest.json', 'hansard_manifest.json', 'gov_publications_manifest.json', 'written_statements_manifest.json', 'written_questions_manifest.json', 'legislation_manifest.json', 'companies_house_manifest.json') }}
+          key: per-api-dbs-${{ hashFiles('mps_manifest.json', 'commons_manifest.json', 'lords_manifest.json', 'bills_manifest.json', 'committees_manifest.json', 'recess_manifest.json', 'interests_manifest.json', 'party_stats_manifest.json', 'bio_data_manifest.json', 'expenses_manifest.json', 'mp_links_manifest.json', 'manifestos_manifest.json', 'historical_members_manifest.json', 'debates_manifest.json', 'member_details_manifest.json', 'hansard_manifest.json', 'gov_publications_manifest.json', 'written_statements_manifest.json', 'written_questions_manifest.json', 'legislation_manifest.json', 'companies_house_manifest.json', 'edms_manifest.json') }}
           restore-keys: |
             per-api-dbs-
 
@@ -196,6 +198,10 @@ jobs:
                 echo "Downloading companies_house.db (changed)"
                 gh release download companies-house-latest --pattern companies_house.db --output per-api-cache/companies_house.db --clobber
                 ;;
+              edms)
+                echo "Downloading edms.db (changed)"
+                gh release download edms-latest --pattern edms.db --output per-api-cache/edms.db --clobber
+                ;;
             esac
           done
 
@@ -234,12 +240,13 @@ jobs:
           download_if_missing written_questions.db written-questions-latest
           download_if_missing legislation.db legislation-latest
           download_if_missing companies_house.db companies-house-latest
+          download_if_missing edms.db edms-latest
 
       - name: Verify per-API DBs present (warn on missing)
         if: steps.check.outputs.needs_update == 'true'
         run: |
           missing=0
-          for db in mps.db commons_votes.db lords_votes.db bills.db committees.db recess.db interests.db party_stats.db bio_data.db expenses.db mp_links.db manifestos.db historical_members.db debates.db member_details.db hansard.db gov_publications.db written_statements.db written_questions.db legislation.db companies_house.db; do
+          for db in mps.db commons_votes.db lords_votes.db bills.db committees.db recess.db interests.db party_stats.db bio_data.db expenses.db mp_links.db manifestos.db historical_members.db debates.db member_details.db hansard.db gov_publications.db written_statements.db written_questions.db legislation.db companies_house.db edms.db; do
             if [ ! -f "per-api-cache/$db" ]; then
               echo "WARNING: $db is missing — seed will have empty tables for this stream"
               missing=1
@@ -285,7 +292,8 @@ jobs:
             --written-statements-db per-api-cache/written_statements.db \
             --written-questions-db per-api-cache/written_questions.db \
             --legislation-db per-api-cache/legislation.db \
-            --companies-house-db per-api-cache/companies_house.db
+            --companies-house-db per-api-cache/companies_house.db \
+            --edms-db per-api-cache/edms.db
 
       - name: Restore tag tables from previous tags.db
         if: steps.check.outputs.needs_update == 'true'
@@ -395,7 +403,8 @@ jobs:
             --written-statements-manifest written_statements_manifest.json \
             --written-questions-manifest written_questions_manifest.json \
             --legislation-manifest legislation_manifest.json \
-            --companies-house-manifest companies_house_manifest.json
+            --companies-house-manifest companies_house_manifest.json \
+            --edms-manifest edms_manifest.json
 
       - name: Extract tags.db for incremental builds
         if: steps.check.outputs.needs_update == 'true'
@@ -422,7 +431,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: per-api-cache
-          key: per-api-dbs-${{ hashFiles('mps_manifest.json', 'commons_manifest.json', 'lords_manifest.json', 'bills_manifest.json', 'committees_manifest.json', 'recess_manifest.json', 'interests_manifest.json', 'party_stats_manifest.json', 'bio_data_manifest.json', 'expenses_manifest.json', 'mp_links_manifest.json', 'manifestos_manifest.json', 'historical_members_manifest.json', 'debates_manifest.json', 'member_details_manifest.json', 'hansard_manifest.json', 'gov_publications_manifest.json', 'written_statements_manifest.json', 'written_questions_manifest.json', 'legislation_manifest.json', 'companies_house_manifest.json') }}
+          key: per-api-dbs-${{ hashFiles('mps_manifest.json', 'commons_manifest.json', 'lords_manifest.json', 'bills_manifest.json', 'committees_manifest.json', 'recess_manifest.json', 'interests_manifest.json', 'party_stats_manifest.json', 'bio_data_manifest.json', 'expenses_manifest.json', 'mp_links_manifest.json', 'manifestos_manifest.json', 'historical_members_manifest.json', 'debates_manifest.json', 'member_details_manifest.json', 'hansard_manifest.json', 'gov_publications_manifest.json', 'written_statements_manifest.json', 'written_questions_manifest.json', 'legislation_manifest.json', 'companies_house_manifest.json', 'edms_manifest.json') }}
 
       - name: No changes — skipping merge
         if: steps.check.outputs.needs_update == 'false'

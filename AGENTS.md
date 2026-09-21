@@ -64,6 +64,7 @@ Each `build_*.py` script fetches from one Parliament API and writes a per-API SQ
 | `build_precompute.py` | precompute.db | mp_stats | Computed from divisions/speeches/committees |
 | `build_tags.py` | tags.db | division_tags, bill_tags, etc. | Computed from divisions/bills/debates |
 | `build_mp_tags.py` | mp_tags.db | mp_tags | Computed from statements/publications/legislation |
+| `build_edms.py` | edms.db | early_day_motions, edm_sponsors | Oral Questions & Motions API |
 
 ### Post-build scripts (no API — computed from existing DBs)
 

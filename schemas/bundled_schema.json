@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
   "database": {
-    "version": 37,
-    "identityHash": "b3a49ef714abcf99f2637fcde8a87a89",
+    "version": 38,
+    "identityHash": "abf5c80b2f350a4e37adfbd792cf4f36",
     "entities": [
       {
         "tableName": "mps",
@@ -3073,11 +3073,179 @@
             "createSql": "CREATE INDEX IF NOT EXISTS `index_constituency_election_candidates_memberId` ON `${TABLE_NAME}` (`memberId`)"
           }
         ]
+      },
+      {
+        "tableName": "early_day_motions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`edmId` INTEGER NOT NULL, `uin` INTEGER, `uinDisplay` TEXT, `title` TEXT, `motionText` TEXT, `dateTabled` TEXT, `statusDate` TEXT, `status` INTEGER, `primarySponsorMemberId` INTEGER, `sponsorsCount` INTEGER, `amendmentToMotionId` INTEGER, `prayingAgainstSiId` INTEGER, `siNumber` INTEGER, `siYear` TEXT, `siTitle` TEXT, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`edmId`))",
+        "fields": [
+          {
+            "fieldPath": "edmId",
+            "columnName": "edmId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "uin",
+            "columnName": "uin",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "uinDisplay",
+            "columnName": "uinDisplay",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "motionText",
+            "columnName": "motionText",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "dateTabled",
+            "columnName": "dateTabled",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "statusDate",
+            "columnName": "statusDate",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "primarySponsorMemberId",
+            "columnName": "primarySponsorMemberId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "sponsorsCount",
+            "columnName": "sponsorsCount",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "amendmentToMotionId",
+            "columnName": "amendmentToMotionId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "prayingAgainstSiId",
+            "columnName": "prayingAgainstSiId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "siNumber",
+            "columnName": "siNumber",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "siYear",
+            "columnName": "siYear",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "siTitle",
+            "columnName": "siTitle",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastUpdated",
+            "columnName": "lastUpdated",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "edmId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_early_day_motions_primarySponsorMemberId",
+            "unique": false,
+            "columnNames": [
+              "primarySponsorMemberId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_early_day_motions_primarySponsorMemberId` ON `${TABLE_NAME}` (`primarySponsorMemberId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "edm_sponsors",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`edmId` INTEGER NOT NULL, `memberId` INTEGER NOT NULL, `sponsoringOrder` INTEGER, `signedAt` TEXT, `isWithdrawn` INTEGER NOT NULL, `withdrawnDate` TEXT, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`edmId`, `memberId`))",
+        "fields": [
+          {
+            "fieldPath": "edmId",
+            "columnName": "edmId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "memberId",
+            "columnName": "memberId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sponsoringOrder",
+            "columnName": "sponsoringOrder",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "signedAt",
+            "columnName": "signedAt",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isWithdrawn",
+            "columnName": "isWithdrawn",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "withdrawnDate",
+            "columnName": "withdrawnDate",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastUpdated",
+            "columnName": "lastUpdated",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "edmId",
+            "memberId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_edm_sponsors_memberId",
+            "unique": false,
+            "columnNames": [
+              "memberId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_edm_sponsors_memberId` ON `${TABLE_NAME}` (`memberId`)"
+          }
+        ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'b3a49ef714abcf99f2637fcde8a87a89')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'abf5c80b2f350a4e37adfbd792cf4f36')"
     ]
   }
 }
