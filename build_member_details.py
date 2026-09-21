@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Per-API build script for MP member details (synopsis, contacts, experience, biography).
+"""Per-API build script for MP member details (synopsis, contacts, experience, biography, elections).
 
 Fetches Synopsis, Contact, Experience, and Biography data for all current
-Commons MPs from the Parliament Members API and builds a per-API DB
-(member_details.db) with four tables: mp_synopsis, mp_contacts,
-mp_experience, mp_career_events.
+Commons MPs from the Parliament Members API, plus per-constituency
+election results from the Location/Constituency endpoints, and builds a
+per-API DB (member_details.db) with six tables: mp_synopsis, mp_contacts,
+mp_experience, mp_career_events, constituency_elections,
+constituency_election_candidates.
 
-These are per-MP endpoints (one HTTP call per MP per endpoint), so this
-script makes 4 × N calls (where N ≈ 650). With API_DELAY=0.2s, the full
-seed takes ~9 minutes.
+The MP endpoints are per-MP (one HTTP call per MP per endpoint), so this
+script makes 4 × N calls (where N ≈ 650). The election pass makes 1×
+ElectionResults + 1× ElectionResult/{id} per election per constituency
+(~1,350 calls). With API_DELAY=0.2s, the full seed takes ~15 minutes.
 
 Modes:
   seed  — create fresh DB, fetch all data, insert
@@ -31,7 +34,8 @@ from api_helper import API_DELAY, BATCH_SIZE, api_get, logger
 # --- Constants ---
 
 MEMBERS_BASE = "https://members-api.parliament.uk/api/"
-TABLE_NAMES = ["mp_synopsis", "mp_contacts", "mp_experience", "mp_career_events"]
+TABLE_NAMES = ["mp_synopsis", "mp_contacts", "mp_experience", "mp_career_events",
+               "constituency_elections", "constituency_election_candidates"]
 
 # Fallback CREATE TABLE for mp_career_events — the schema JSON does not yet
 # include this table, so create_database_with_tables() won't create it.
@@ -72,6 +76,70 @@ def ensure_mp_career_events_table(conn):
     conn.commit()
 
 
+# Fallback CREATE TABLEs for the election tables — must match the Room
+# createSql in schema v37 (column affinities, NOT NULLs, composite PKs,
+# index names) so validate_schema.py passes TableInfo parity even when
+# the build runs against a stale bundled_schema.json.
+CONSTITUENCY_ELECTIONS_CREATE_SQL = """
+CREATE TABLE IF NOT EXISTS constituency_elections (
+    constituencyId INTEGER NOT NULL,
+    electionId INTEGER NOT NULL,
+    result TEXT,
+    isNotional INTEGER NOT NULL,
+    electorate INTEGER,
+    turnout INTEGER,
+    majority INTEGER,
+    winningPartyId INTEGER,
+    winningPartyName TEXT,
+    winningPartyColour TEXT,
+    electionTitle TEXT,
+    electionDate TEXT,
+    isGeneralElection INTEGER NOT NULL,
+    constituencyName TEXT,
+    lastUpdated INTEGER NOT NULL,
+    PRIMARY KEY(constituencyId, electionId)
+)
+"""
+
+CONSTITUENCY_ELECTION_CANDIDATES_CREATE_SQL = """
+CREATE TABLE IF NOT EXISTS constituency_election_candidates (
+    constituencyId INTEGER NOT NULL,
+    electionId INTEGER NOT NULL,
+    rankOrder INTEGER NOT NULL,
+    memberId INTEGER,
+    name TEXT,
+    partyId INTEGER,
+    partyName TEXT,
+    partyAbbreviation TEXT,
+    partyColour TEXT,
+    resultChange TEXT,
+    votes INTEGER,
+    lastUpdated INTEGER NOT NULL,
+    PRIMARY KEY(constituencyId, electionId, rankOrder)
+)
+"""
+
+CONSTITUENCY_ELECTIONS_INDEX_SQL = (
+    "CREATE INDEX IF NOT EXISTS index_constituency_elections_constituencyId "
+    "ON constituency_elections(constituencyId)"
+)
+
+CONSTITUENCY_ELECTION_CANDIDATES_INDEX_SQL = (
+    "CREATE INDEX IF NOT EXISTS index_constituency_election_candidates_memberId "
+    "ON constituency_election_candidates(memberId)"
+)
+
+
+def ensure_election_tables(conn):
+    """Create the election tables if the schema JSON predates v37."""
+    cursor = conn.cursor()
+    cursor.execute(CONSTITUENCY_ELECTIONS_CREATE_SQL)
+    cursor.execute(CONSTITUENCY_ELECTIONS_INDEX_SQL)
+    cursor.execute(CONSTITUENCY_ELECTION_CANDIDATES_CREATE_SQL)
+    cursor.execute(CONSTITUENCY_ELECTION_CANDIDATES_INDEX_SQL)
+    conn.commit()
+
+
 # --- MP ID fetching ---
 
 def fetch_mp_ids_from_db(mps_db_path):
@@ -83,6 +151,20 @@ def fetch_mp_ids_from_db(mps_db_path):
     conn.close()
     logger.info("Read %d MP IDs from %s", len(mp_ids), mps_db_path)
     return mp_ids
+
+
+def fetch_constituency_ids_from_db(mps_db_path):
+    """Read distinct constituency ids from mps.db (0 = missing membership data)."""
+    conn = sqlite3.connect(mps_db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT DISTINCT constituencyId FROM mps WHERE constituencyId > 0 "
+        "ORDER BY constituencyId"
+    )
+    ids = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    logger.info("Read %d constituency IDs from %s", len(ids), mps_db_path)
+    return ids
 
 
 # --- API fetching ---
@@ -143,6 +225,39 @@ def fetch_biography(mp_id):
         return data.get("value")
     except Exception as e:
         logger.warning("Biography fetch failed for MP %d: %s", mp_id, e)
+        return None
+
+
+def fetch_election_stubs(constituency_id):
+    """Fetch the seat's election history summaries.
+
+    GET Location/Constituency/{id}/ElectionResults → {"value": [...]}.
+    Items carry all election-level fields but candidates is always [] —
+    candidates come from fetch_election_detail.
+    """
+    try:
+        r = api_get(f"{MEMBERS_BASE}Location/Constituency/{constituency_id}/ElectionResults",
+                    timeout=30)
+        return r.json().get("value") or []
+    except Exception as e:
+        logger.warning("ElectionResults fetch failed for constituency %d: %s",
+                       constituency_id, e)
+        return []
+
+
+def fetch_election_detail(constituency_id, election_id):
+    """Fetch one election's full record including candidates.
+
+    GET Location/Constituency/{id}/ElectionResult/{electionId} → {"value": {...}}.
+    """
+    try:
+        r = api_get(
+            f"{MEMBERS_BASE}Location/Constituency/{constituency_id}"
+            f"/ElectionResult/{election_id}", timeout=30)
+        return r.json().get("value")
+    except Exception as e:
+        logger.warning("ElectionResult fetch failed for constituency %d election %d: %s",
+                       constituency_id, election_id, e)
         return None
 
 
@@ -243,6 +358,47 @@ def map_biography_events(mp_id, bio_data, timestamp_millis):
                 timestamp_millis,
             ))
     return rows
+
+
+def map_election(constituency_id, dto, timestamp_millis):
+    """Map an ElectionResult dict to a constituency_elections row tuple."""
+    party = dto.get("winningParty") or {}
+    return (
+        constituency_id,
+        dto.get("electionId") or 0,
+        dto.get("result"),
+        1 if dto.get("isNotional") else 0,
+        dto.get("electorate"),
+        dto.get("turnout"),
+        dto.get("majority"),
+        party.get("id"),
+        party.get("name"),
+        party.get("backgroundColour"),
+        dto.get("electionTitle"),
+        dto.get("electionDate"),
+        1 if dto.get("isGeneralElection") else 0,
+        dto.get("constituencyName"),
+        timestamp_millis,
+    )
+
+
+def map_candidate(constituency_id, election_id, cand, fallback_rank, timestamp_millis):
+    """Map a candidate dict to a constituency_election_candidates row tuple."""
+    party = cand.get("party") or {}
+    return (
+        constituency_id,
+        election_id,
+        cand.get("rankOrder") or fallback_rank,
+        cand.get("memberId"),          # null unless candidate is/was an MP
+        cand.get("name"),
+        party.get("id"),
+        party.get("name"),
+        party.get("abbreviation"),
+        party.get("backgroundColour"),
+        cand.get("resultChange"),      # string: "RUK Gain", "0.1%", ""
+        cand.get("votes"),
+        timestamp_millis,
+    )
 
 
 # --- Insertion ---
@@ -367,9 +523,72 @@ def insert_career_events(conn, rows):
     conn.commit()  # updates/deletes above must be committed before VACUUM
 
 
+def insert_elections(conn, rows):
+    cursor = conn.cursor()
+    sql = """
+        INSERT OR REPLACE INTO constituency_elections (
+            constituencyId, electionId, result, isNotional, electorate, turnout,
+            majority, winningPartyId, winningPartyName, winningPartyColour,
+            electionTitle, electionDate, isGeneralElection, constituencyName,
+            lastUpdated
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    for i in range(0, len(rows), BATCH_SIZE):
+        cursor.executemany(sql, rows[i:i + BATCH_SIZE])
+        conn.commit()
+
+
+def insert_election_candidates(conn, rows):
+    cursor = conn.cursor()
+    sql = """
+        INSERT OR REPLACE INTO constituency_election_candidates (
+            constituencyId, electionId, rankOrder, memberId, name,
+            partyId, partyName, partyAbbreviation, partyColour,
+            resultChange, votes, lastUpdated
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    for i in range(0, len(rows), BATCH_SIZE):
+        cursor.executemany(sql, rows[i:i + BATCH_SIZE])
+        conn.commit()
+
+
 # --- Build ---
 
-def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=None):
+def build_election_rows(conn, mps_db, timestamp_millis, constituency_limit=None):
+    """Fetch + insert election results for every constituency."""
+    constituency_ids = fetch_constituency_ids_from_db(mps_db)
+    if constituency_limit:
+        constituency_ids = constituency_ids[:constituency_limit]
+    election_rows = []
+    candidate_rows = []
+    for i, cid in enumerate(constituency_ids):
+        stubs = fetch_election_stubs(cid)
+        time.sleep(API_DELAY)
+        for stub in stubs:
+            election_id = stub.get("electionId")
+            if not election_id:
+                continue
+            election_rows.append(map_election(cid, stub, timestamp_millis))
+            detail = fetch_election_detail(cid, election_id)
+            time.sleep(API_DELAY)
+            for rank, cand in enumerate((detail or {}).get("candidates") or [], start=1):
+                candidate_rows.append(
+                    map_candidate(cid, election_id, cand, rank, timestamp_millis))
+        if (i + 1) % 50 == 0:
+            insert_elections(conn, election_rows)
+            insert_election_candidates(conn, candidate_rows)
+            election_rows = []
+            candidate_rows = []
+            logger.info("Election results: %d/%d constituencies", i + 1,
+                        len(constituency_ids))
+    if election_rows:
+        insert_elections(conn, election_rows)
+    if candidate_rows:
+        insert_election_candidates(conn, candidate_rows)
+
+
+def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=None,
+               constituency_limit=None):
     """Seed mode: create fresh DB, fetch all data, insert."""
     timestamp_millis = int(time.time() * 1000)
 
@@ -378,6 +597,7 @@ def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=No
             shutil.copy2(checkpoint_db, output_path)
         conn = sqlite3.connect(output_path)
         ensure_mp_career_events_table(conn)
+        ensure_election_tables(conn)
         cursor = conn.cursor()
         cursor.execute("SELECT mpId FROM mp_synopsis")
         processed = {row[0] for row in cursor.fetchall()}
@@ -387,6 +607,7 @@ def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=No
             output_path, schema_path, TABLE_NAMES,
         )
         ensure_mp_career_events_table(conn)
+        ensure_election_tables(conn)
         processed = set()
 
     mp_ids = fetch_mp_ids_from_db(mps_db)
@@ -443,19 +664,24 @@ def build_seed(output_path, schema_path, mps_db, mp_limit=None, checkpoint_db=No
     if career_event_rows:
         insert_career_events(conn, career_event_rows)
 
+    build_election_rows(conn, mps_db, timestamp_millis,
+                        constituency_limit=constituency_limit)
+
     logger.info("VACUUMing database...")
     conn.execute("VACUUM")
     conn.close()
     logger.info("Seed build complete: %s", output_path)
 
 
-def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None):
+def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None,
+                constituency_limit=None):
     """Delta mode: copy previous DB, fetch all data, upsert."""
     timestamp_millis = int(time.time() * 1000)
 
     shutil.copy2(previous_db, output_path)
     conn = sqlite3.connect(output_path)
     ensure_mp_career_events_table(conn)
+    ensure_election_tables(conn)
 
     mp_ids = fetch_mp_ids_from_db(mps_db)
     if mp_limit:
@@ -505,6 +731,9 @@ def build_delta(output_path, previous_db, schema_path, mps_db, mp_limit=None):
     if career_event_rows:
         insert_career_events(conn, career_event_rows)
 
+    build_election_rows(conn, mps_db, timestamp_millis,
+                        constituency_limit=constituency_limit)
+
     logger.info("VACUUMing database...")
     conn.execute("VACUUM")
     conn.close()
@@ -527,6 +756,8 @@ def main():
                         help="Path to mps.db (for MP ID list).")
     parser.add_argument("--mp-limit", type=int, default=None,
                         help="Limit number of MPs fetched (for testing).")
+    parser.add_argument("--constituency-limit", type=int, default=None,
+                        help="Limit number of constituencies fetched (for testing).")
     parser.add_argument("--checkpoint-db",
                         help="Path to a checkpoint DB to resume from (seed mode only).")
     args = parser.parse_args()
@@ -536,10 +767,12 @@ def main():
 
     if args.mode == "seed":
         build_seed(args.output, args.schema, args.mps_db,
-                   mp_limit=args.mp_limit, checkpoint_db=args.checkpoint_db)
+                   mp_limit=args.mp_limit, checkpoint_db=args.checkpoint_db,
+                   constituency_limit=args.constituency_limit)
     else:
         build_delta(args.output, args.previous_db, args.schema, args.mps_db,
-                    mp_limit=args.mp_limit)
+                    mp_limit=args.mp_limit,
+                    constituency_limit=args.constituency_limit)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
   "database": {
-    "version": 36,
-    "identityHash": "4c822fa540f82eb58496ea19e87a41a9",
+    "version": 37,
+    "identityHash": "b3a49ef714abcf99f2637fcde8a87a89",
     "entities": [
       {
         "tableName": "mps",
@@ -2880,11 +2880,204 @@
             "createSql": "CREATE INDEX IF NOT EXISTS `index_mp_appointments_mpId` ON `${TABLE_NAME}` (`mpId`)"
           }
         ]
+      },
+      {
+        "tableName": "constituency_elections",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`constituencyId` INTEGER NOT NULL, `electionId` INTEGER NOT NULL, `result` TEXT, `isNotional` INTEGER NOT NULL, `electorate` INTEGER, `turnout` INTEGER, `majority` INTEGER, `winningPartyId` INTEGER, `winningPartyName` TEXT, `winningPartyColour` TEXT, `electionTitle` TEXT, `electionDate` TEXT, `isGeneralElection` INTEGER NOT NULL, `constituencyName` TEXT, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`constituencyId`, `electionId`))",
+        "fields": [
+          {
+            "fieldPath": "constituencyId",
+            "columnName": "constituencyId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "electionId",
+            "columnName": "electionId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "result",
+            "columnName": "result",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isNotional",
+            "columnName": "isNotional",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "electorate",
+            "columnName": "electorate",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "turnout",
+            "columnName": "turnout",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "majority",
+            "columnName": "majority",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "winningPartyId",
+            "columnName": "winningPartyId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "winningPartyName",
+            "columnName": "winningPartyName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "winningPartyColour",
+            "columnName": "winningPartyColour",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "electionTitle",
+            "columnName": "electionTitle",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "electionDate",
+            "columnName": "electionDate",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isGeneralElection",
+            "columnName": "isGeneralElection",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "constituencyName",
+            "columnName": "constituencyName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastUpdated",
+            "columnName": "lastUpdated",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "constituencyId",
+            "electionId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_constituency_elections_constituencyId",
+            "unique": false,
+            "columnNames": [
+              "constituencyId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_constituency_elections_constituencyId` ON `${TABLE_NAME}` (`constituencyId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "constituency_election_candidates",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`constituencyId` INTEGER NOT NULL, `electionId` INTEGER NOT NULL, `rankOrder` INTEGER NOT NULL, `memberId` INTEGER, `name` TEXT, `partyId` INTEGER, `partyName` TEXT, `partyAbbreviation` TEXT, `partyColour` TEXT, `resultChange` TEXT, `votes` INTEGER, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`constituencyId`, `electionId`, `rankOrder`))",
+        "fields": [
+          {
+            "fieldPath": "constituencyId",
+            "columnName": "constituencyId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "electionId",
+            "columnName": "electionId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rankOrder",
+            "columnName": "rankOrder",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "memberId",
+            "columnName": "memberId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "partyId",
+            "columnName": "partyId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "partyName",
+            "columnName": "partyName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "partyAbbreviation",
+            "columnName": "partyAbbreviation",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "partyColour",
+            "columnName": "partyColour",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "resultChange",
+            "columnName": "resultChange",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "votes",
+            "columnName": "votes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastUpdated",
+            "columnName": "lastUpdated",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "constituencyId",
+            "electionId",
+            "rankOrder"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_constituency_election_candidates_memberId",
+            "unique": false,
+            "columnNames": [
+              "memberId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_constituency_election_candidates_memberId` ON `${TABLE_NAME}` (`memberId`)"
+          }
+        ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '4c822fa540f82eb58496ea19e87a41a9')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'b3a49ef714abcf99f2637fcde8a87a89')"
     ]
   }
 }

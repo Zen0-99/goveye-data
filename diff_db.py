@@ -53,6 +53,8 @@ TABLE_PRIMARY_KEYS = {
     "party_manifestos": ["partyId"],
     "party_stats": ["partyId"],
     "historical_members": ["twfyPersonId"],
+    "constituency_elections": ["constituencyId", "electionId"],
+    "constituency_election_candidates": ["constituencyId", "electionId", "rankOrder"],
 }
 
 
@@ -71,6 +73,16 @@ def get_table_rows(conn, table_name):
     Convert any column whose name starts with 'is' or is a known boolean
     column and has value 0/1 to a Python bool so json.dump emits true/false.
     """
+    # A table may not exist in this DB at all — e.g. a new stream table
+    # absent from the previous per-API DB on the first delta after it
+    # ships. Treat it as empty so every new row becomes an upsert.
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    if not exists:
+        return []
+
     # Known boolean columns that don't follow the 'is*' naming convention
     known_bool_columns = {
         "rectified",  # interests table
