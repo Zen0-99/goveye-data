@@ -10,7 +10,10 @@ to process new/changed rows instead of re-processing everything.
 Falls back gracefully:
   - If tags.db is missing or not provided → exit 1 (caller should skip
     incremental, do full tag rebuild)
-  - If tags.db identity hash doesn't match current schema → exit 1
+  - If any tag table's structure in tags.db differs from the current
+    schema → exit 1 (that table genuinely needs re-tagging)
+  - Unrelated schema changes elsewhere (new/changed non-tag tables) do
+    NOT block restore — existing tags stay valid
   - If any table is missing from tags.db → warning, but continue with
     available tables
 
@@ -48,40 +51,50 @@ TAG_TABLES = [
 ]
 
 
-def _check_identity_hash(tags_db_path, expected_hash):
-    """Check if tags.db has a matching room_master_table identity hash.
+def _tag_tables_compatible(tags_db_path, schema):
+    """Check that each tag table in tags.db matches the current schema.
 
-    Returns True if the hash matches, False otherwise (including if
-    room_master_table is missing — which means the tags.db was built
-    before this feature was added, or is corrupted).
+    Scoped to TAG_TABLES only — comparing the whole-schema identity hash
+    meant adding an unrelated table anywhere forced a full tag rebuild
+    (~30 min of re-tagging rows whose tags cannot change). Only a change
+    to a tag table's own columns/PK makes restored rows unsafe.
     """
     try:
         conn = sqlite3.connect(tags_db_path)
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='room_master_table'"
-        )
-        if not cursor.fetchone():
-            logger.info("tags.db has no room_master_table — cannot verify schema")
-            conn.close()
-            return False
-
-        cursor.execute("SELECT identity_hash FROM room_master_table WHERE id = 42")
-        row = cursor.fetchone()
-        conn.close()
-
-        if not row or row[0] != expected_hash:
-            logger.info(
-                "tags.db identity hash mismatch (expected %s, got %s) — schema changed",
-                expected_hash,
-                row[0] if row else "none",
+        entities = {e["tableName"]: e for e in schema_module.get_entities(schema)}
+        for table_name in TAG_TABLES:
+            entity = entities.get(table_name)
+            if entity is None:
+                logger.info("  %s not in current schema — skipping check", table_name)
+                continue
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (table_name,),
             )
-            return False
-
-        logger.info("tags.db identity hash matches current schema")
+            if not cursor.fetchone():
+                continue  # missing table is handled (warned) at copy time
+            expected_cols = {
+                f["columnName"]: f["affinity"].upper()
+                for f in entity.get("fields", [])
+            }
+            expected_pk = set(entity.get("primaryKey", {}).get("columnNames", []))
+            cursor.execute(f"PRAGMA table_info({table_name})")
+            actual = cursor.fetchall()
+            actual_cols = {row[1]: row[2].upper() for row in actual}
+            actual_pk = {row[1] for row in actual if row[5]}
+            if actual_cols != expected_cols or actual_pk != expected_pk:
+                logger.info(
+                    "tags.db table %s structure differs from current schema",
+                    table_name,
+                )
+                conn.close()
+                return False
+        conn.close()
+        logger.info("tags.db tag-table structure matches current schema")
         return True
     except Exception as e:
-        logger.info("Cannot verify tags.db identity hash: %s", e)
+        logger.info("Cannot verify tags.db schema: %s", e)
         return False
 
 
@@ -104,11 +117,10 @@ def restore_tags(output_path, tags_db_path, schema_path):
         logger.info("tags.db not found — will skip restore (full tag rebuild needed)")
         return 1
 
-    # Verify schema compatibility
+    # Verify tag-table structure compatibility
     schema = schema_module.load_schema(schema_path)
-    expected_hash = schema_module.get_identity_hash(schema)
 
-    if not _check_identity_hash(tags_db_path, expected_hash):
+    if not _tag_tables_compatible(tags_db_path, schema):
         logger.info("tags.db schema mismatch — will skip restore (full tag rebuild needed)")
         return 1
 
@@ -192,7 +204,7 @@ def main():
     )
     parser.add_argument(
         "--schema", required=True,
-        help="Path to the Room schema JSON (for identity hash verification).",
+        help="Path to the Room schema JSON (for tag-table structure verification).",
     )
     args = parser.parse_args()
 
