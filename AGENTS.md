@@ -139,6 +139,13 @@ have hit 445MB. Avoid:
   `build_member_details.py` / `build_wikipedia.py`).
 - **`lastUpdated`-only diffs.** `diff_db.py` excludes `lastUpdated` from
   row comparison — stamp it freely, it won't trigger an upsert by itself.
+- **Title matching on `postsJson` must be strict.** A substring
+  contains-match on post titles matched "Chief Secretary to the Prime
+  Minister" and "Office of the Deputy Prime Minister" as `Prime Minister`
+  rows — three parties got a false PM and the app showed Conservative as
+  the governing party. Match current posts only (`endDate` null), anchor
+  the leader title at the start, and keep a disqualifier list
+  (`build_party_leaders.py`).
 - **BLOB columns** serialize to signed-byte JSON arrays automatically in
   `diff_db.py` (kotlinx `ByteArray` format).
 
